@@ -15,6 +15,7 @@ import {
   extractPathname,
   LighthouseScoreBadge,
 } from "@/client/features/audit/shared";
+import { LIGHTHOUSE_SAMPLE_ERROR_COPY } from "@/shared/audit-failure-copy";
 import type { AuditResultsData } from "@/client/features/audit/results/types";
 import {
   countActiveFilters,
@@ -140,14 +141,17 @@ function buildPerformanceColumns({
       header: ({ column }) => <SortableHeader column={column} label="Status" />,
       cell: ({ row }) => {
         const isFailed = isLighthouseFailure(row.original);
+        const failureCode = row.original.errorCode;
         const failureMessage =
-          row.original.errorMessage ?? "Lighthouse returned no category scores";
+          (failureCode ? LIGHTHOUSE_SAMPLE_ERROR_COPY[failureCode] : null) ??
+          row.original.errorMessage ??
+          "Lighthouse returned no category scores";
         return isFailed ? (
           <span
             className="badge badge-error badge-outline text-xs"
             title={failureMessage}
           >
-            failed
+            {failureCode ?? "failed"}
           </span>
         ) : (
           <span className="badge badge-success badge-outline text-xs">ok</span>

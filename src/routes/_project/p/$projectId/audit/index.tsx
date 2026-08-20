@@ -18,6 +18,8 @@ import {
   StatusBadge,
   SUPPORT_EMAIL,
 } from "@/client/features/audit/shared";
+import { isHostedClientAuthMode } from "@/lib/auth-mode";
+import { failedAuditBannerCopy } from "@/shared/audit-failure-copy";
 
 export const Route = createFileRoute<"/_project/p/$projectId/audit/">(
   "/_project/p/$projectId/audit/",
@@ -124,7 +126,25 @@ function AuditDetail({
   const partialPageCount = isFailed
     ? (resultsQuery.data?.pages.length ?? 0)
     : 0;
-  const failedWithResults = isFailed && partialPageCount > 0;
+  const partialLighthouseCount = isFailed
+    ? (resultsQuery.data?.lighthouse.length ??
+      status?.lighthouseChecksStored ??
+      0)
+    : 0;
+  const failedWithResults =
+    isFailed && (partialPageCount > 0 || partialLighthouseCount > 0);
+  const failedBanner =
+    failedWithResults && status
+      ? failedAuditBannerCopy({
+          pageCount: partialPageCount,
+          lighthouseStored: partialLighthouseCount,
+          lighthouseTotal: status.lighthouseTotal,
+          creditsCharged: status.lighthouseCreditsCharged,
+          errorCode: status.errorCode,
+          failedPhase: status.failedPhase,
+          hosted: isHostedClientAuthMode(),
+        })
+      : null;
   // Wait for the results fetch before choosing between the "partial results"
   // banner and the zero-page support CTA, so the CTA doesn't flash first.
   const showSupportCta =
@@ -184,17 +204,13 @@ function AuditDetail({
           </div>
         )}
 
-        {failedWithResults && (
+        {failedWithResults && failedBanner && (
           <div className="alert alert-warning">
             <AlertCircle className="size-5" />
             <div className="space-y-1">
-              <p className="font-medium">
-                This audit stopped early after {partialPageCount} page
-                {partialPageCount === 1 ? "" : "s"}.
-              </p>
+              <p className="font-medium">{failedBanner.title}</p>
               <p>
-                The results below cover everything crawled before it stopped.
-                Run a new audit to try again, or email{" "}
+                {failedBanner.body} Email{" "}
                 <a
                   className="link link-primary"
                   href={`mailto:${SUPPORT_EMAIL}`}

@@ -1,33 +1,30 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
-  fetchLighthouseResultMock,
+  fetchLighthousePairMock,
+  persistLighthouseResultsMock,
   selectLighthouseSampleMock,
-  storeLighthouseResultMock,
   pgStepMock,
   getPagesForAuditMock,
-  insertLighthouseResultsMock,
-  updateAuditProgressMock,
 } = vi.hoisted(() => ({
-  fetchLighthouseResultMock: vi.fn(),
+  fetchLighthousePairMock: vi.fn(),
+  persistLighthouseResultsMock: vi.fn(),
   selectLighthouseSampleMock: vi.fn(),
-  storeLighthouseResultMock: vi.fn(),
   pgStepMock: vi.fn(),
   getPagesForAuditMock: vi.fn(),
-  insertLighthouseResultsMock: vi.fn(),
-  updateAuditProgressMock: vi.fn(),
 }));
 
 vi.mock("@/server/lib/audit/lighthouse", () => ({
-  fetchLighthouseResult: fetchLighthouseResultMock,
   selectLighthouseSample: selectLighthouseSampleMock,
-  storeLighthouseResult: storeLighthouseResultMock,
+}));
+vi.mock("@/server/features/audit/services/lighthousePersist", () => ({
+  fetchLighthousePair: fetchLighthousePairMock,
+  persistLighthouseResults: persistLighthouseResultsMock,
 }));
 vi.mock("@/server/features/audit/repositories/AuditRepository", () => ({
   AuditRepository: {
     getPagesForAudit: getPagesForAuditMock,
-    insertLighthouseResults: insertLighthouseResultsMock,
-    updateAuditProgress: updateAuditProgressMock,
+    updateAuditProgress: vi.fn(),
   },
 }));
 vi.mock("@/server/features/audit/AuditScratchpad", () => ({
@@ -49,6 +46,19 @@ vi.mock("@/server/workflows/pgStep", () => ({ pgStep: pgStepMock }));
 
 import { runLighthousePhase } from "@/server/workflows/siteAuditWorkflowPhases";
 
+const phaseParams = {
+  auditId: "audit-1",
+  workflowInstanceId: "workflow-1",
+  billingCustomer: {
+    userId: "user-1",
+    userEmail: "test@example.com",
+    organizationId: "org-1",
+  },
+  projectId: "project-1",
+  startUrl: "https://example.com/",
+  config: { maxPages: 50, lighthouseStrategy: "auto" as const },
+};
+
 describe("runLighthousePhase", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -60,17 +70,14 @@ describe("runLighthousePhase", () => {
       },
     ]);
     selectLighthouseSampleMock.mockReturnValue(["https://example.com/"]);
-    fetchLighthouseResultMock.mockImplementation(
-      async (_url: string, pageId: string, strategy: "mobile" | "desktop") => ({
-        result: { pageId, strategy },
-        payloadJson: "{}",
-      }),
-    );
-    storeLighthouseResultMock.mockImplementation(
-      async ({ fetched }: { fetched: { result: unknown } }) => fetched.result,
-    );
-    insertLighthouseResultsMock.mockResolvedValue(undefined);
-    updateAuditProgressMock.mockResolvedValue(undefined);
+    fetchLighthousePairMock.mockResolvedValue([
+      { result: { pageId: "page-1", strategy: "mobile" }, costUsd: 0.004 },
+      { result: { pageId: "page-1", strategy: "desktop" }, costUsd: 0.004 },
+    ]);
+    persistLighthouseResultsMock.mockResolvedValue({
+      completed: 2,
+      failed: 0,
+    });
   });
 
   it("does not replay paid calls when persistence retries", async () => {
@@ -102,37 +109,19 @@ describe("runLighthousePhase", () => {
       },
     );
 
-    updateAuditProgressMock
-      .mockResolvedValueOnce(undefined)
+    persistLighthouseResultsMock
       .mockRejectedValueOnce(new Error("progress unavailable"))
-      .mockResolvedValueOnce(undefined);
+      .mockResolvedValue({ completed: 2, failed: 0 });
 
     // pgStep is mocked above, so the opaque WorkflowStep object is never read.
     // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion
-    await runLighthousePhase({} as never, {
-      auditId: "audit-1",
-      workflowInstanceId: "workflow-1",
-      billingCustomer: {
-        userId: "user-1",
-        userEmail: "test@example.com",
-        organizationId: "org-1",
-      },
-      projectId: "project-1",
-      startUrl: "https://example.com/",
-      config: { maxPages: 50, lighthouseStrategy: "auto" },
-    });
+    await runLighthousePhase({} as never, phaseParams);
 
-    expect(fetchLighthouseResultMock).toHaveBeenCalledTimes(2);
-    expect(storeLighthouseResultMock).toHaveBeenCalledTimes(4);
-    expect(insertLighthouseResultsMock).toHaveBeenCalledTimes(2);
+    expect(fetchLighthousePairMock).toHaveBeenCalledTimes(1);
+    expect(persistLighthouseResultsMock).toHaveBeenCalledTimes(2);
     expect(persistenceAttempts).toBe(2);
     expect(fetchRetryLimit).toBe(0);
     expect(persistenceRetryLimit).toBe(3);
-    expect(updateAuditProgressMock).toHaveBeenLastCalledWith(
-      "audit-1",
-      "workflow-1",
-      { lighthouseCompleted: 2, lighthouseFailed: 0 },
-    );
   });
 
   it("does not replay paid calls for a cached legacy batch", async () => {
@@ -152,18 +141,7 @@ describe("runLighthousePhase", () => {
 
     // pgStep is mocked above, so the opaque WorkflowStep object is never read.
     // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion
-    await runLighthousePhase({} as never, {
-      auditId: "audit-1",
-      workflowInstanceId: "workflow-1",
-      billingCustomer: {
-        userId: "user-1",
-        userEmail: "test@example.com",
-        organizationId: "org-1",
-      },
-      projectId: "project-1",
-      startUrl: "https://example.com/",
-      config: { maxPages: 50, lighthouseStrategy: "auto" },
-    });
+    await runLighthousePhase({} as never, phaseParams);
 
     expect(pgStepMock).toHaveBeenCalledWith(
       {},
@@ -171,6 +149,6 @@ describe("runLighthousePhase", () => {
       expect.anything(),
       expect.any(Function),
     );
-    expect(fetchLighthouseResultMock).not.toHaveBeenCalled();
+    expect(fetchLighthousePairMock).not.toHaveBeenCalled();
   });
 });

@@ -87,6 +87,14 @@ export interface PageAnalysis {
   hreflangTags: string[];
 }
 
+/** Closed vocabulary for a single Lighthouse sample (not the audit workflow). */
+export type LighthouseSampleErrorCode =
+  | "provider_error"
+  | "provider_timeout"
+  | "invalid_request"
+  | "payload_parse"
+  | "unknown";
+
 /** Lighthouse result for a single URL+strategy. */
 export interface LighthouseResult {
   url: string;
@@ -101,6 +109,9 @@ export interface LighthouseResult {
   inpMs: number | null;
   ttfbMs: number | null;
   errorMessage?: string | null;
+  errorCode?: LighthouseSampleErrorCode | null;
+  costUsd?: number | null;
+  creditsCharged?: number | null;
   r2Key?: string | null;
   payloadSizeBytes?: number | null;
 }

@@ -1,6 +1,6 @@
 import { detectUrlTemplate, canonicalUrlKey } from "./url-utils";
-import type { BillingCustomerContext } from "@/server/billing/subscription";
-import { createDataforseoClient } from "@/server/lib/dataforseo";
+import { fetchLighthouseLive } from "@/server/lib/dataforseo";
+import { classifyLighthouseSampleError } from "@/server/lib/audit/lighthouse-errors";
 import type { LighthouseResult, LighthouseStrategy } from "./types";
 import { putTextToR2 } from "@/server/lib/r2";
 
@@ -17,20 +17,42 @@ function canonicalUrlKeyWithoutTrailingSlash(url: string): string {
   return parsed.toString();
 }
 
-type LighthouseFetchResult = {
+export type LighthouseFetchResult = {
   result: LighthouseResult;
-  payloadJson: string | null;
+  costUsd: number | null;
 };
+
+function emptyScores(
+  url: string,
+  pageId: string,
+  strategy: "mobile" | "desktop",
+): LighthouseResult {
+  return {
+    url,
+    pageId,
+    strategy,
+    performanceScore: null,
+    accessibilityScore: null,
+    bestPracticesScore: null,
+    seoScore: null,
+    lcpMs: null,
+    cls: null,
+    inpMs: null,
+    ttfbMs: null,
+  };
+}
 
 export async function fetchLighthouseResult(
   url: string,
   pageId: string,
   strategy: "mobile" | "desktop",
-  billingCustomer: BillingCustomerContext,
+  storage: { projectId: string; auditId: string },
 ): Promise<LighthouseFetchResult> {
-  const dataforseo = createDataforseoClient(billingCustomer);
   try {
-    const data = await dataforseo.lighthouse.live({ url, strategy });
+    const { data, billing } = await fetchLighthouseLive({ url, strategy });
+    const payloadJson = JSON.stringify(data);
+    const key = `site-audit/${storage.projectId}/${storage.auditId}/${pageId}-${strategy}.json`;
+    const uploaded = await putTextToR2(key, payloadJson);
 
     return {
       result: {
@@ -45,50 +67,25 @@ export async function fetchLighthouseResult(
         cls: data.metrics.cumulativeLayoutShift.numericValue,
         inpMs: data.metrics.interactionToNextPaint.numericValue,
         ttfbMs: data.metrics.serverResponseTime.numericValue,
+        costUsd: billing.costUsd,
+        r2Key: uploaded.key,
+        payloadSizeBytes: uploaded.sizeBytes,
       },
-      payloadJson: JSON.stringify(data),
+      costUsd: billing.costUsd,
     };
   } catch (error) {
-    const failed = error instanceof Error ? error : new Error(String(error));
-    console.error(`Lighthouse failed for ${url}:`, failed.message);
+    const classified = classifyLighthouseSampleError(error);
+    console.error(`Lighthouse failed for ${url}:`, classified.errorMessage);
     return {
       result: {
-        url,
-        pageId,
-        strategy,
-        performanceScore: null,
-        accessibilityScore: null,
-        bestPracticesScore: null,
-        seoScore: null,
-        lcpMs: null,
-        cls: null,
-        inpMs: null,
-        ttfbMs: null,
-        errorMessage: failed.message,
+        ...emptyScores(url, pageId, strategy),
+        errorMessage: classified.errorMessage,
+        errorCode: classified.errorCode,
+        costUsd: classified.costUsd,
       },
-      payloadJson: null,
+      costUsd: classified.costUsd,
     };
   }
-}
-
-export async function storeLighthouseResult(input: {
-  projectId: string;
-  auditId: string;
-  fetched: LighthouseFetchResult;
-}): Promise<LighthouseResult> {
-  if (!input.fetched.payloadJson) {
-    return input.fetched.result;
-  }
-
-  const { pageId, strategy } = input.fetched.result;
-  const key = `site-audit/${input.projectId}/${input.auditId}/${pageId}-${strategy}.json`;
-  const uploaded = await putTextToR2(key, input.fetched.payloadJson);
-
-  return {
-    ...input.fetched.result,
-    r2Key: uploaded.key,
-    payloadSizeBytes: uploaded.sizeBytes,
-  };
 }
 
 /**

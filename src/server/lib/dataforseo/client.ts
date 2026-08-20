@@ -128,9 +128,6 @@ export function createDataforseoClient(customer: BillingCustomerContext) {
       ),
       serpCompetitors: meter(customer, (s) => s.fetchSerpCompetitors),
     },
-    lighthouse: {
-      live: meter(customer, (s) => s.fetchLighthouseResult),
-    },
     aiSearch: {
       mentionsSearch: meter(customer, (s) => s.fetchLlmMentionsSearch),
       aggregatedMetrics: meter(customer, (s) => s.fetchLlmAggregatedMetrics),

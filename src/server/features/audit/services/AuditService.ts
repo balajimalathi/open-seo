@@ -5,6 +5,7 @@ import {
   type BillingCustomerContext,
 } from "@/server/billing/subscription";
 import { AuditRepository } from "@/server/features/audit/repositories/AuditRepository";
+import { AuditLighthouseRepository } from "@/server/features/audit/repositories/AuditLighthouseRepository";
 import { getAuditScratchpad } from "@/server/features/audit/AuditScratchpad";
 import {
   AUDIT_LIMITS,
@@ -145,6 +146,10 @@ async function getStatus(auditId: string, projectId: string) {
     }
   }
 
+  const billing = await AuditLighthouseRepository.getLighthouseBillingSummary(
+    audit.id,
+  );
+
   return {
     id: audit.id,
     startUrl: audit.startUrl,
@@ -154,8 +159,11 @@ async function getStatus(auditId: string, projectId: string) {
     lighthouseTotal: audit.lighthouseTotal,
     lighthouseCompleted: audit.lighthouseCompleted,
     lighthouseFailed: audit.lighthouseFailed,
+    lighthouseCreditsCharged: billing.creditsCharged,
+    lighthouseChecksStored: billing.checksStored,
     currentPhase: audit.currentPhase,
     errorCode: audit.errorCode,
+    failedPhase: audit.failedPhase,
     startedAt: audit.startedAt,
     completedAt: audit.completedAt,
   };

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { AuditLighthouseRepository } from "@/server/features/audit/repositories/AuditLighthouseRepository";
 import { AuditRepository } from "@/server/features/audit/repositories/AuditRepository";
 import { AuditService } from "@/server/features/audit/services/AuditService";
 import { AppError } from "@/server/lib/errors";
@@ -16,6 +17,11 @@ import {
 } from "@/server/mcp/output-schemas";
 import { withMcpProjectAuth } from "@/server/mcp/project-auth";
 import { projectIdSchema } from "@/server/mcp/schemas";
+import {
+  attachLighthouseToAuditPages,
+  formatAuditPagesText,
+  formatAuditStatusText,
+} from "@/server/mcp/tools/audit-pages-lighthouse";
 
 const auditIdSchema = z
   .string()
@@ -40,8 +46,6 @@ async function resolveAudit(projectId: string, auditId?: string) {
 function auditPath(projectId: string, auditId: string) {
   return `/p/${projectId}/audit?auditId=${auditId}`;
 }
-
-// ─── run_site_audit ──────────────────────────────────────────────────────────
 
 const runInputSchema = {
   projectId: projectIdSchema,
@@ -139,8 +143,6 @@ export const runSiteAuditTool = {
   }),
 };
 
-// ─── get_audit_status ────────────────────────────────────────────────────────
-
 const statusInputSchema = {
   projectId: projectIdSchema,
   auditId: auditIdSchema,
@@ -168,25 +170,10 @@ export const getAuditStatusTool = {
     },
   },
   handler: withMcpProjectAuth(async (args: StatusArgs, context) => {
-    // getStatus fetches (and self-heals) the audit row itself; only hit the
-    // DB here when we need to default to the most recent audit.
     const auditId = args.auditId ?? (await resolveAudit(args.projectId)).id;
     const status = await AuditService.getStatus(auditId, args.projectId);
-
-    const lighthouseNote =
-      status.lighthouseTotal > 0
-        ? `, lighthouse ${status.lighthouseCompleted + status.lighthouseFailed}/${status.lighthouseTotal}`
-        : "";
-    // Failed audits keep partial results — point agents at them instead of
-    // letting a mid-crawl death read as "no data".
-    const nextStep =
-      status.status === "completed"
-        ? " Call get_audit_issues for the issue report."
-        : status.status === "failed" && status.pagesCrawled > 0
-          ? ` The audit stopped early but kept results for the ${status.pagesCrawled} pages it crawled — call get_audit_issues for the partial issue report.`
-          : "";
     return mcpResponse({
-      text: `Audit ${status.id} (${status.startUrl}): ${status.status} — phase ${status.currentPhase}, ${status.pagesCrawled}/${status.pagesTotal} pages${lighthouseNote}.${nextStep}`,
+      text: formatAuditStatusText(status),
       meta: buildProjectMeta(
         context,
         args.projectId,
@@ -196,8 +183,6 @@ export const getAuditStatusTool = {
     });
   }),
 };
-
-// ─── get_audit_issues ────────────────────────────────────────────────────────
 
 const issuesInputSchema = {
   projectId: projectIdSchema,
@@ -249,7 +234,6 @@ export const getAuditIssuesTool = {
       severity: args.severity,
       issueType: args.issueType,
     });
-    // Severity-first so truncation drops info rows, never critical ones.
     const rows = unsorted.toSorted(
       (a, b) =>
         ISSUE_SEVERITY_ORDER[a.severity] - ISSUE_SEVERITY_ORDER[b.severity] ||
@@ -318,8 +302,6 @@ export const getAuditIssuesTool = {
   }),
 };
 
-// ─── get_audit_pages ─────────────────────────────────────────────────────────
-
 const pagesInputSchema = {
   projectId: projectIdSchema,
   auditId: auditIdSchema,
@@ -354,7 +336,7 @@ export const getAuditPagesTool = {
   config: {
     title: "Get site audit pages",
     description:
-      "List crawled pages from a site audit with per-page SEO data (status, title, description, word count, indexability, crawl depth, link counts). Free — reads OpenSEO state. Omit auditId for the most recent audit.",
+      "List crawled pages from a site audit with per-page SEO data and any stored Lighthouse scores, including partial results from a failed audit. Free — reads OpenSEO state. Omit auditId for the most recent audit.",
     inputSchema: pagesInputSchema,
     outputSchema: z
       .object({
@@ -371,7 +353,10 @@ export const getAuditPagesTool = {
   },
   handler: withMcpProjectAuth(async (args: PagesArgs, context) => {
     const audit = await resolveAudit(args.projectId, args.auditId);
-    const allPages = await AuditRepository.getPagesForAudit(audit.id);
+    const [allPages, lighthouseRows] = await Promise.all([
+      AuditRepository.getPagesForAudit(audit.id),
+      AuditLighthouseRepository.getLighthouseResultsForAudit(audit.id),
+    ]);
 
     const filtered = allPages.filter(
       (page) =>
@@ -381,21 +366,19 @@ export const getAuditPagesTool = {
         (!args.urlContains || page.url.includes(args.urlContains)),
     );
     const limit = args.limit ?? 100;
-    const pages = filtered.slice(0, limit);
-
-    const text = [
-      `Audit ${audit.id}: ${filtered.length} pages${filtered.length > limit ? ` (showing ${limit})` : ""}.`,
-      ...pages
-        .slice(0, 25)
-        .map(
-          (page) =>
-            `- ${page.statusCode} ${page.url}${page.fetchClass !== "ok" ? ` [${page.fetchClass}]` : ""}  "${page.title ?? ""}"`,
-        ),
-      "Full rows are in structuredContent.pages.",
-    ].join("\n");
+    const pages = attachLighthouseToAuditPages(
+      filtered.slice(0, limit),
+      lighthouseRows,
+    );
 
     return mcpResponse({
-      text,
+      text: formatAuditPagesText({
+        auditId: audit.id,
+        filteredCount: filtered.length,
+        limit,
+        lighthouseCount: lighthouseRows.length,
+        pages,
+      }),
       meta: buildProjectMeta(
         context,
         args.projectId,

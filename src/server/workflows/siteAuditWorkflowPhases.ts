@@ -1,11 +1,11 @@
 import type { WorkflowStep } from "cloudflare:workers";
 import type { BillingCustomerContext } from "@/server/billing/subscription";
 import { discoverUrls, parseRobotsTxt } from "@/server/lib/audit/discovery";
+import { selectLighthouseSample } from "@/server/lib/audit/lighthouse";
 import {
-  fetchLighthouseResult,
-  selectLighthouseSample,
-  storeLighthouseResult,
-} from "@/server/lib/audit/lighthouse";
+  fetchLighthousePair,
+  persistLighthouseResults,
+} from "@/server/features/audit/services/lighthousePersist";
 import {
   getOrigin,
   isSameOrigin,
@@ -228,19 +228,20 @@ export async function runLighthousePhase(
     );
     for (const [batchOffset, { url, pageId }] of batch.entries()) {
       const index = batchStart + batchOffset;
-      // The paid calls are checkpointed separately from all storage. With
-      // Workflow retries disabled, a later R2/DB/progress failure cannot replay
-      // DataForSEO. One URL groups its mobile + desktop checks into one compact
-      // checkpoint rather than returning a whole Lighthouse batch.
+      // Paid calls are checkpointed as compact scores + r2Key (never the full
+      // Lighthouse JSON). Stored samples are reused so a replay cannot buy
+      // the same URL twice.
       const fetched = await pgStep(
         step,
         `lighthouse-fetch-${index + 1}`,
         LIGHTHOUSE_FETCH_STEP,
         () =>
-          Promise.all([
-            fetchLighthouseResult(url, pageId, "mobile", billingCustomer),
-            fetchLighthouseResult(url, pageId, "desktop", billingCustomer),
-          ]),
+          fetchLighthousePair({
+            url,
+            pageId,
+            projectId,
+            auditId,
+          }),
       );
 
       const priorCompleted = completedChecks;
@@ -249,30 +250,15 @@ export async function runLighthousePhase(
         step,
         `lighthouse-persist-${index + 1}`,
         LIGHTHOUSE_PERSIST_STEP,
-        async () => {
-          const results = await Promise.all(
-            fetched.map((result) =>
-              storeLighthouseResult({
-                projectId,
-                auditId,
-                fetched: result,
-              }),
-            ),
-          );
-          await AuditRepository.insertLighthouseResults(auditId, results);
-
-          const failed = results.filter((result) => result.errorMessage).length;
-          const completed = results.length - failed;
-          await AuditRepository.updateAuditProgress(
+        () =>
+          persistLighthouseResults({
             auditId,
             workflowInstanceId,
-            {
-              lighthouseCompleted: priorCompleted + completed,
-              lighthouseFailed: priorFailed + failed,
-            },
-          );
-          return { completed, failed };
-        },
+            billingCustomer,
+            fetched,
+            priorCompleted,
+            priorFailed,
+          }),
       );
 
       completedChecks += counts.completed;

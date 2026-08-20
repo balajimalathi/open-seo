@@ -35,3 +35,13 @@ export function autumnSeoDataCreditsToUsd(credits: number) {
 export function applyBillingMarkupUsd(rawUsd: number): number {
   return roundUsdForBilling(rawUsd * SEO_DATA_COST_MARKUP);
 }
+
+/** Convert a raw DataForSEO USD cost into Autumn-style credits. */
+export function seoDataCreditsFromUsd(
+  costUsd: number,
+  hosted: boolean,
+): number {
+  if (costUsd <= 0) return 0;
+  const billedUsd = hosted ? applyBillingMarkupUsd(costUsd) : costUsd;
+  return Math.ceil(billedUsd * AUTUMN_SEO_DATA_CREDITS_PER_USD);
+}

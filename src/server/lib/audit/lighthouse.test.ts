@@ -1,13 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const createDataforseoClientMock = vi.hoisted(() => vi.fn());
+const fetchLighthouseLiveMock = vi.hoisted(() => vi.fn());
+const putTextToR2Mock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/server/lib/dataforseo", () => ({
-  createDataforseoClient: createDataforseoClientMock,
+  fetchLighthouseLive: fetchLighthouseLiveMock,
 }));
 
 vi.mock("@/server/lib/r2", () => ({
-  putTextToR2: vi.fn(),
+  putTextToR2: putTextToR2Mock,
 }));
 
 import { fetchLighthouseResult, selectLighthouseSample } from "./lighthouse";
@@ -67,43 +68,84 @@ describe("selectLighthouseSample", () => {
   });
 });
 
+const scores = {
+  performance: 90,
+  accessibility: 91,
+  "best-practices": 92,
+  seo: 93,
+};
+const metrics = {
+  largestContentfulPaint: { numericValue: 1000 },
+  cumulativeLayoutShift: { numericValue: 0.01 },
+  interactionToNextPaint: { numericValue: 100 },
+  serverResponseTime: { numericValue: 200 },
+};
+
 describe("fetchLighthouseResult", () => {
-  const billingCustomer = {
-    userId: "user-1",
-    userEmail: "test@example.com",
-    organizationId: "org-1",
-  };
+  const storage = { projectId: "project-1", auditId: "audit-1" };
 
   it("does not retry an ambiguous generic failure", async () => {
-    const live = vi
-      .fn()
+    fetchLighthouseLiveMock
       .mockRejectedValueOnce(new Error("temporary failure"))
       .mockResolvedValueOnce({
-        scores: {
-          performance: 90,
-          accessibility: 91,
-          "best-practices": 92,
-          seo: 93,
-        },
-        metrics: {
-          largestContentfulPaint: { numericValue: 1000 },
-          cumulativeLayoutShift: { numericValue: 0.01 },
-          interactionToNextPaint: { numericValue: 100 },
-          serverResponseTime: { numericValue: 200 },
-        },
+        data: { scores, metrics },
+        billing: { costUsd: 0.004, path: ["on_page", "lighthouse"] },
       });
-    createDataforseoClientMock.mockReturnValue({
-      lighthouse: { live },
+
+    const fetched = await fetchLighthouseResult(
+      "https://example.com/",
+      "page-1",
+      "desktop",
+      storage,
+    );
+
+    expect(fetchLighthouseLiveMock).toHaveBeenCalledOnce();
+    expect(fetched.result.errorMessage).toBe("temporary failure");
+    expect(fetched.result.errorCode).toBe("unknown");
+    expect(putTextToR2Mock).not.toHaveBeenCalled();
+  });
+
+  it("uploads the payload to R2 and returns compact scores", async () => {
+    fetchLighthouseLiveMock.mockResolvedValue({
+      data: { scores, metrics },
+      billing: { costUsd: 0.00425, path: ["on_page", "lighthouse"] },
+    });
+    putTextToR2Mock.mockResolvedValue({
+      key: "site-audit/project-1/audit-1/page-1-desktop.json",
+      sizeBytes: 12,
     });
 
     const fetched = await fetchLighthouseResult(
       "https://example.com/",
       "page-1",
       "desktop",
-      billingCustomer,
+      storage,
     );
 
-    expect(live).toHaveBeenCalledOnce();
-    expect(fetched.result.errorMessage).toBe("temporary failure");
+    expect(putTextToR2Mock).toHaveBeenCalledWith(
+      "site-audit/project-1/audit-1/page-1-desktop.json",
+      JSON.stringify({ scores, metrics }),
+    );
+    expect(fetched).not.toHaveProperty("payloadJson");
+    expect(fetched.result.r2Key).toBe(
+      "site-audit/project-1/audit-1/page-1-desktop.json",
+    );
+    expect(fetched.result.performanceScore).toBe(90);
+    expect(fetched.costUsd).toBe(0.00425);
+  });
+
+  it("classifies a provider timeout as a compact sample error", async () => {
+    fetchLighthouseLiveMock.mockRejectedValue(new Error("Request timed out"));
+
+    const fetched = await fetchLighthouseResult(
+      "https://example.com/",
+      "page-1",
+      "mobile",
+      storage,
+    );
+
+    expect(fetched.result.errorCode).toBe("provider_timeout");
+    expect(fetched.result.performanceScore).toBeNull();
+    expect(putTextToR2Mock).not.toHaveBeenCalled();
   });
 });

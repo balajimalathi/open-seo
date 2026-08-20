@@ -45,6 +45,13 @@ export const fetchBusinessListingsCategories: DataforseoSections["fetchBusinessL
   async () =>
     (await loadDataforseoSections()).fetchBusinessListingsCategories();
 
+/** Lighthouse live is billed at DataForSEO call time. Audit persistence
+ * meters OpenSEO credits after the sample is stored, so this wrapper skips
+ * the metered client to avoid charging before the row exists. */
+export const fetchLighthouseLive: DataforseoSections["fetchLighthouseResult"] =
+  async (input) =>
+    (await loadDataforseoSections()).fetchLighthouseResult(input);
+
 export type {
   BusinessTaskEndpoint,
   BusinessTaskOutcome,

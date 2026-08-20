@@ -60,6 +60,20 @@ This provisions the D1 database, KV namespaces, and R2 bucket, applies the datab
 
 To manage the Access application yourself instead, set `TEAM_DOMAIN` (`https://your-team.cloudflareaccess.com`) and `POLICY_AUD` (the application's audience tag) in `.env.selfhost` — the deploy then provisions no Access resources.
 
+## Optional: custom domain
+
+To serve the Worker from your own hostname, set `CUSTOM_DOMAIN` in `.env.selfhost` (hostname only, no scheme) and redeploy. Comma-separate more than one hostname:
+
+```env
+CUSTOM_DOMAIN=seo.example.com
+```
+
+The DNS zone must already live on the same Cloudflare account — Alchemy infers the zone from each hostname. A successful deploy logs `Reconciling custom domains (1)` (or more, if you listed several), and the hostname still resolves after a second deploy.
+
+Attaching the domain only in the dashboard (or via the Workers domains API) without this var does not survive the next deploy: Alchemy treats an unset `domain` as "no custom domains" and deletes it.
+
+Cloudflare Access still gates the `workers.dev` hostname. To gate the custom hostname too, add it to the Access application in Zero Trust (or manage Access yourself with `TEAM_DOMAIN` and `POLICY_AUD`).
+
 ## 5) Validate setup
 
 1. Open the Worker URL printed at the end of the deploy.

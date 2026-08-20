@@ -10,8 +10,8 @@ Alchemy-managed Cloudflare Access boundary.
 - One persistent Access application protects
   `open-seo-*.<WORKERS_SUBDOMAIN>` before any preview Worker exists.
 - Production uses the unsuffixed `open-seo` Worker on `app.openseo.so` and
-  `www.app.openseo.so`. It does not match the preview wildcard and is not
-  placed behind preview Access.
+  `www.app.openseo.so` (from `CUSTOM_DOMAIN` in `.env.production`). It does not
+  match the preview wildcard and is not placed behind preview Access.
 - A separate persistent Alchemy stack manages the shared Access boundary. A
   failed preview deploy or teardown therefore cannot remove the gate protecting
   other previews.

@@ -307,6 +307,20 @@ export default Alchemy.Stack(
       Config.withDefault("cloudflare_access"),
     );
     const databaseProvider = yield* optionalVar("DATABASE_PROVIDER");
+    // Comma-separated hostnames (no scheme). Prod requires this so an unset
+    // value cannot reconcile as "zero domains" and delete live custom hostnames.
+    // Non-prod: unset keeps workers.dev only.
+    const customDomains = (yield* optionalVar("CUSTOM_DOMAIN"))
+      .split(",")
+      .map((host) => host.trim())
+      .filter(Boolean);
+    if (prod && customDomains.length === 0) {
+      return yield* Effect.die(
+        new Error(
+          "Set CUSTOM_DOMAIN in .env.production (comma-separated hostnames, e.g. app.openseo.so,www.app.openseo.so).",
+        ),
+      );
+    }
     const workersSubdomain = yield* readWorkersSubdomain({ required: false });
 
     // Auth needs an absolute BETTER_AUTH_URL. Prod sets it explicitly;
@@ -353,8 +367,8 @@ export default Alchemy.Stack(
 
     const app = yield* Cloudflare.Worker("open-seo", {
       name: workerName(stage),
-      // Prod serves the real domains; the zone is inferred from the hostname.
-      domain: prod ? ["app.openseo.so", "www.app.openseo.so"] : undefined,
+      // Zone is inferred from each hostname.
+      domain: customDomains.length > 0 ? customDomains : undefined,
       // Prebuilt worker from `vite build` (@cloudflare/vite-plugin). The entry
       // exports the DO + WorkflowEntrypoint classes (re-exported by
       // src/server.ts), which `bundle: false` requires. Sibling chunks under

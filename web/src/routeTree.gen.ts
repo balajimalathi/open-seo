@@ -24,7 +24,6 @@ import { Route as ApiSubscribeRouteImport } from './routes/api/subscribe'
 import { Route as ApiEventRouteImport } from './routes/api/event'
 import { Route as ApiBacklinkCheckRouteImport } from './routes/api/backlink-check'
 import { Route as MarketingRoadmapRouteImport } from './routes/_marketing/roadmap'
-import { Route as MarketingPricingRouteImport } from './routes/_marketing/pricing'
 import { Route as MarketingOpenSourceSeoRouteImport } from './routes/_marketing/open-source-seo'
 import { Route as MarketingGoogleSearchConsoleMcpRouteImport } from './routes/_marketing/google-search-console-mcp'
 import { Route as MarketingBacklinkCheckerRouteImport } from './routes/_marketing/backlink-checker'
@@ -122,11 +121,6 @@ const ApiBacklinkCheckRoute = ApiBacklinkCheckRouteImport.update({
 const MarketingRoadmapRoute = MarketingRoadmapRouteImport.update({
   id: '/roadmap',
   path: '/roadmap',
-  getParentRoute: () => MarketingRoute,
-} as any)
-const MarketingPricingRoute = MarketingPricingRouteImport.update({
-  id: '/pricing',
-  path: '/pricing',
   getParentRoute: () => MarketingRoute,
 } as any)
 const MarketingOpenSourceSeoRoute = MarketingOpenSourceSeoRouteImport.update({
@@ -279,7 +273,6 @@ export interface FileRoutesByFullPath {
   '/backlink-checker': typeof MarketingBacklinkCheckerRoute
   '/google-search-console-mcp': typeof MarketingGoogleSearchConsoleMcpRoute
   '/open-source-seo': typeof MarketingOpenSourceSeoRoute
-  '/pricing': typeof MarketingPricingRoute
   '/roadmap': typeof MarketingRoadmapRoute
   '/api/backlink-check': typeof ApiBacklinkCheckRoute
   '/api/event': typeof ApiEventRoute
@@ -319,7 +312,6 @@ export interface FileRoutesByTo {
   '/backlink-checker': typeof MarketingBacklinkCheckerRoute
   '/google-search-console-mcp': typeof MarketingGoogleSearchConsoleMcpRoute
   '/open-source-seo': typeof MarketingOpenSourceSeoRoute
-  '/pricing': typeof MarketingPricingRoute
   '/roadmap': typeof MarketingRoadmapRoute
   '/api/backlink-check': typeof ApiBacklinkCheckRoute
   '/api/event': typeof ApiEventRoute
@@ -362,7 +354,6 @@ export interface FileRoutesById {
   '/_marketing/backlink-checker': typeof MarketingBacklinkCheckerRoute
   '/_marketing/google-search-console-mcp': typeof MarketingGoogleSearchConsoleMcpRoute
   '/_marketing/open-source-seo': typeof MarketingOpenSourceSeoRoute
-  '/_marketing/pricing': typeof MarketingPricingRoute
   '/_marketing/roadmap': typeof MarketingRoadmapRoute
   '/api/backlink-check': typeof ApiBacklinkCheckRoute
   '/api/event': typeof ApiEventRoute
@@ -406,7 +397,6 @@ export interface FileRouteTypes {
     | '/backlink-checker'
     | '/google-search-console-mcp'
     | '/open-source-seo'
-    | '/pricing'
     | '/roadmap'
     | '/api/backlink-check'
     | '/api/event'
@@ -446,7 +436,6 @@ export interface FileRouteTypes {
     | '/backlink-checker'
     | '/google-search-console-mcp'
     | '/open-source-seo'
-    | '/pricing'
     | '/roadmap'
     | '/api/backlink-check'
     | '/api/event'
@@ -488,7 +477,6 @@ export interface FileRouteTypes {
     | '/_marketing/backlink-checker'
     | '/_marketing/google-search-console-mcp'
     | '/_marketing/open-source-seo'
-    | '/_marketing/pricing'
     | '/_marketing/roadmap'
     | '/api/backlink-check'
     | '/api/event'
@@ -645,13 +633,6 @@ declare module '@tanstack/react-router' {
       path: '/roadmap'
       fullPath: '/roadmap'
       preLoaderRoute: typeof MarketingRoadmapRouteImport
-      parentRoute: typeof MarketingRoute
-    }
-    '/_marketing/pricing': {
-      id: '/_marketing/pricing'
-      path: '/pricing'
-      fullPath: '/pricing'
-      preLoaderRoute: typeof MarketingPricingRouteImport
       parentRoute: typeof MarketingRoute
     }
     '/_marketing/open-source-seo': {
@@ -829,7 +810,6 @@ interface MarketingRouteChildren {
   MarketingBacklinkCheckerRoute: typeof MarketingBacklinkCheckerRoute
   MarketingGoogleSearchConsoleMcpRoute: typeof MarketingGoogleSearchConsoleMcpRoute
   MarketingOpenSourceSeoRoute: typeof MarketingOpenSourceSeoRoute
-  MarketingPricingRoute: typeof MarketingPricingRoute
   MarketingRoadmapRoute: typeof MarketingRoadmapRoute
   MarketingIndexRoute: typeof MarketingIndexRoute
   MarketingFeaturesAiBrandVisibilityRoute: typeof MarketingFeaturesAiBrandVisibilityRoute
@@ -859,7 +839,6 @@ const MarketingRouteChildren: MarketingRouteChildren = {
   MarketingBacklinkCheckerRoute: MarketingBacklinkCheckerRoute,
   MarketingGoogleSearchConsoleMcpRoute: MarketingGoogleSearchConsoleMcpRoute,
   MarketingOpenSourceSeoRoute: MarketingOpenSourceSeoRoute,
-  MarketingPricingRoute: MarketingPricingRoute,
   MarketingRoadmapRoute: MarketingRoadmapRoute,
   MarketingIndexRoute: MarketingIndexRoute,
   MarketingFeaturesAiBrandVisibilityRoute:

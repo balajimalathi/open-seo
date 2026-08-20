@@ -53,7 +53,6 @@ function getMobileNavItems(githubStarCount: string) {
       links: [
         { label: "Features", href: "/features" },
         { label: "Roadmap", href: "/roadmap" },
-        { label: "Pricing", href: "/pricing" },
       ],
     },
     {
@@ -177,12 +176,6 @@ function MarketingLayout() {
                 className="text-sm font-semibold text-neutral-600 transition-colors hover:text-neutral-900"
               >
                 Roadmap
-              </Link>
-              <Link
-                to="/pricing"
-                className="text-sm font-semibold text-neutral-600 transition-colors hover:text-neutral-900"
-              >
-                Pricing
               </Link>
             </div>
 

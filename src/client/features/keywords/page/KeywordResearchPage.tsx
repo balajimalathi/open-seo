@@ -242,7 +242,7 @@ function KeywordResearchContent({
           </div>
           {isCreditsError ? (
             <Link to={BILLING_ROUTE} className="btn btn-sm">
-              Go to Billing
+              View Credits
             </Link>
           ) : (
             <button className="btn btn-sm" onClick={controller.retrySearch}>

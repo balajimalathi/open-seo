@@ -266,14 +266,12 @@ function SidebarFooter({ onNavigate }: { onNavigate?: () => void }) {
                 Settings
               </Link>
             </li>
-            {isHostedMode ? (
-              <li>
-                <Link to={BILLING_ROUTE} onClick={closeMenu}>
-                  <CreditCard className="h-4 w-4" />
-                  Billing
-                </Link>
-              </li>
-            ) : null}
+            <li>
+              <Link to={BILLING_ROUTE} onClick={closeMenu}>
+                <CreditCard className="h-4 w-4" />
+                Credits
+              </Link>
+            </li>
             <ThemePreferenceMenuItems />
             {isHostedMode ? (
               <>

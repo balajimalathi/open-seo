@@ -2,21 +2,14 @@ import {
   type CreditFeature,
   mapDataforseoPathToCreditFeature,
 } from "@/shared/billing-credit-features";
-import {
-  assertUsageCreditsAvailable,
-  getOrCreateOrganizationCustomer,
-  trackUsageCreditSpend,
-} from "@/server/billing/subscription";
 import type { BillingCustomerContext } from "@/server/billing/subscription";
 // Type-only namespace import: erased at compile, so the section modules (and
 // the SDK they pull in) still only load through loadDataforseoSections below.
 import type * as sections from "@/server/lib/dataforseo/sections";
 import {
   DataforseoChargedTaskError,
-  type DataforseoApiCallCost,
   type DataforseoApiResponse,
 } from "@/server/lib/dataforseo/envelope";
-import { isHostedServerAuthMode } from "@/server/lib/runtime-env";
 import { AppError } from "@/server/lib/errors";
 
 export { mapDataforseoPathToCreditFeature };
@@ -152,76 +145,24 @@ export function createDataforseoClient(customer: BillingCustomerContext) {
 }
 
 async function meterDataforseoCall<T>(
-  customer: BillingCustomerContext,
+  _customer: BillingCustomerContext,
   execute: () => Promise<DataforseoApiResponse<T>>,
-  creditFeature?: CreditFeature,
+  _creditFeature?: CreditFeature,
 ): Promise<T> {
-  const isHostedMode = await isHostedServerAuthMode();
-
-  if (!isHostedMode) {
+  // Personal deployments do not meter through Autumn. DataForSEO bills the
+  // configured API key directly. Still unwrap Invalid Field errors that
+  // DataForSEO did not charge so callers get VALIDATION_ERROR.
+  try {
     const result = await execute();
     return result.data;
-  }
-
-  const billingCustomer = await getOrCreateOrganizationCustomer(customer);
-
-  const { monthlyRemaining } = await assertUsageCreditsAvailable(
-    billingCustomer.id,
-  );
-
-  let result: DataforseoApiResponse<T>;
-  try {
-    result = await execute();
   } catch (error) {
-    if (error instanceof DataforseoChargedTaskError) {
-      // A malformed request (DataForSEO "Invalid Field: ...") that DataForSEO
-      // did not bill returns no value to the customer, so don't charge — surface
-      // it as a non-reportable VALIDATION_ERROR. If DataForSEO still billed us
-      // (costUsd > 0), fall through to the normal charge + capture path so the
-      // spend stays metered and visible instead of silently eaten.
-      if (error.isInvalidField && error.billing.costUsd <= 0) {
-        throw new AppError("VALIDATION_ERROR", error.message);
-      }
-      await trackDataforseoCost({
-        customer,
-        customerId: billingCustomer.id,
-        billing: error.billing,
-        monthlyRemaining,
-        creditFeature,
-      });
+    if (
+      error instanceof DataforseoChargedTaskError &&
+      error.isInvalidField &&
+      error.billing.costUsd <= 0
+    ) {
+      throw new AppError("VALIDATION_ERROR", error.message);
     }
     throw error;
   }
-
-  await trackDataforseoCost({
-    customer,
-    customerId: billingCustomer.id,
-    billing: result.billing,
-    monthlyRemaining,
-    creditFeature,
-  });
-
-  return result.data;
-}
-
-async function trackDataforseoCost(args: {
-  customer: BillingCustomerContext;
-  customerId: string;
-  billing: DataforseoApiCallCost;
-  monthlyRemaining: number;
-  creditFeature?: CreditFeature;
-}) {
-  await trackUsageCreditSpend({
-    customer: args.customer,
-    customerId: args.customerId,
-    creditFeature:
-      args.creditFeature ?? mapDataforseoPathToCreditFeature(args.billing.path),
-    costUsd: args.billing.costUsd,
-    monthlyRemaining: args.monthlyRemaining,
-    properties: {
-      provider: "dataforseo",
-      paths: [args.billing.path.join("/")],
-      fromCache: false,
-    },
-  });
 }

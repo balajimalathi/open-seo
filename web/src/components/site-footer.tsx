@@ -61,7 +61,6 @@ export function SiteFooter({ className }: { className?: string }) {
           <p className="font-semibold text-neutral-900">Company</p>
           <div className="mt-2 flex flex-col gap-1.5">
             <Link to="/roadmap">Roadmap</Link>
-            <Link to="/pricing">Pricing</Link>
             <a
               href="https://github.com/every-app/open-seo"
               target="_blank"

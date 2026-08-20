@@ -107,23 +107,18 @@ describe("runScheduledRankChecks", () => {
     mocks.getDueConfigsWithOrganization.mockResolvedValue([dueConfig()]);
   });
 
-  it("advances a free config with plan_required instead of starting a workflow", async () => {
-    mocks.customerHasPaidPlan.mockResolvedValue(false);
+  it("claims a paid config instead of skipping for plan_required", async () => {
+    mocks.customerHasPaidPlan.mockResolvedValue(true);
 
     await runTick();
 
-    expect(mocks.claimDueConfig).toHaveBeenCalledTimes(1);
     expect(mocks.claimDueConfig).toHaveBeenCalledWith(
       expect.objectContaining({
         configId: "config_1",
-        projectId: "project_1",
-        observedNextCheckAt: "2026-01-01T00:00:00.000Z",
-        lastSkipReason: "plan_required",
+        lastSkipReason: null,
       }),
     );
-    const [claim] = mocks.claimDueConfig.mock.calls[0];
-    expect(new Date(claim.nextCheckAt).getTime()).toBeGreaterThan(Date.now());
-    expect(mocks.beginRankCheckRun).not.toHaveBeenCalled();
+    expect(mocks.beginRankCheckRun).toHaveBeenCalledTimes(1);
   });
 
   it("advances a zero-keyword config with no_keywords without consuming budget", async () => {

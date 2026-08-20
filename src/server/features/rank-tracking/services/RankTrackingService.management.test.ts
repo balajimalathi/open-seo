@@ -209,9 +209,13 @@ describe("RankTrackingService management invariants", () => {
     });
   });
 
-  it("rejects a hosted unpaid run before keyword or workflow work", async () => {
+  it("allows hosted runs when plan access is granted", async () => {
+    mocks.beginRankCheckRun.mockResolvedValue({
+      ok: true,
+      runId: "run_1",
+    });
     mocks.isHostedServerAuthMode.mockResolvedValue(true);
-    mocks.customerHasPaidPlan.mockResolvedValue(false);
+    mocks.customerHasPaidPlan.mockResolvedValue(true);
 
     await expect(
       RankTrackingService.triggerCheck({
@@ -219,9 +223,9 @@ describe("RankTrackingService management invariants", () => {
         projectId: "project_1",
         billingCustomer,
       }),
-    ).rejects.toMatchObject({ code: "PAYMENT_REQUIRED" });
-    expect(mocks.getKeywordsForConfig).not.toHaveBeenCalled();
-    expect(mocks.beginRankCheckRun).not.toHaveBeenCalled();
+    ).resolves.toEqual({ ok: true, runId: "run_1" });
+    expect(mocks.getKeywordsForConfig).toHaveBeenCalled();
+    expect(mocks.beginRankCheckRun).toHaveBeenCalled();
   });
 
   it("allows paid hosted and self-hosted runs", async () => {
@@ -287,9 +291,11 @@ describe("RankTrackingService management invariants", () => {
     );
   });
 
-  it("rejects hosted unpaid metrics refresh before provider work", async () => {
+  it("allows hosted metrics refresh when plan access is granted", async () => {
     mocks.isHostedServerAuthMode.mockResolvedValue(true);
-    mocks.customerHasPaidPlan.mockResolvedValue(false);
+    mocks.customerHasPaidPlan.mockResolvedValue(true);
+    mocks.createDataforseoClient.mockReturnValue({});
+    mocks.fetchKeywordMetricsForList.mockResolvedValue([]);
 
     await expect(
       RankTrackingService.refreshKeywordMetrics(
@@ -297,9 +303,8 @@ describe("RankTrackingService management invariants", () => {
         "project_1",
         billingCustomer,
       ),
-    ).rejects.toMatchObject({ code: "PAYMENT_REQUIRED" });
-    expect(mocks.createDataforseoClient).not.toHaveBeenCalled();
-    expect(mocks.fetchKeywordMetricsForList).not.toHaveBeenCalled();
+    ).resolves.toEqual({ updated: 0 });
+    expect(mocks.fetchKeywordMetricsForList).toHaveBeenCalledTimes(1);
   });
 
   it("allows self-hosted metrics refresh without a plan check", async () => {

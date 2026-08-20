@@ -1,12 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  AUTUMN_PAID_PLAN_FEATURE_ID,
-  AUTUMN_SEO_DATA_BALANCE_FEATURE_ID,
-  AUTUMN_SEO_DATA_TOPUP_BALANCE_FEATURE_ID,
-} from "@/shared/billing";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { checkMock, getOrCreateMock, kvGetMock, kvPutMock } = vi.hoisted(() => ({
-  checkMock: vi.fn(),
+const { getOrCreateMock, kvGetMock, kvPutMock } = vi.hoisted(() => ({
   getOrCreateMock: vi.fn(),
   kvGetMock: vi.fn(),
   kvPutMock: vi.fn(),
@@ -18,7 +12,7 @@ vi.mock("cloudflare:workers", () => ({
 
 vi.mock("@/server/billing/autumn", () => ({
   autumn: {
-    check: checkMock,
+    check: vi.fn(),
     customers: {
       getOrCreate: getOrCreateMock,
     },
@@ -29,16 +23,17 @@ vi.mock("@/server/lib/runtime-env", () => ({
   isHostedServerAuthMode: vi.fn(),
 }));
 
-// subscription.ts now imports posthog (for trackUsageCreditSpend); stub it so
-// the test doesn't pull in the cloudflare:workers runtime it depends on.
 vi.mock("@/server/lib/posthog", () => ({
   captureServerEvent: vi.fn(),
 }));
 
 import {
   assertUsageCreditsAvailable,
+  checkUsageCreditsDepleted,
+  customerHasManagedAccess,
   customerHasPaidPlan,
   getOrCreateOrganizationCustomer,
+  trackUsageCreditSpend,
 } from "./subscription";
 
 describe("subscription billing", () => {
@@ -48,78 +43,50 @@ describe("subscription billing", () => {
     kvPutMock.mockResolvedValue(undefined);
   });
 
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  it("checks the paid plan entitlement", async () => {
-    checkMock.mockResolvedValue({ allowed: true });
-
+  it("always grants paid plan access", async () => {
     await expect(customerHasPaidPlan("org_123")).resolves.toBe(true);
+    await expect(
+      customerHasPaidPlan("org_123", { retryDenied: true }),
+    ).resolves.toBe(true);
+  });
 
-    expect(checkMock).toHaveBeenCalledWith({
-      customerId: "org_123",
-      featureId: AUTUMN_PAID_PLAN_FEATURE_ID,
+  it("always grants managed access", async () => {
+    await expect(customerHasManagedAccess("org_123")).resolves.toBe(true);
+  });
+
+  it("never treats usage credits as depleted", async () => {
+    await expect(
+      checkUsageCreditsDepleted({
+        organizationId: "org_123",
+        userId: "user_123",
+        userEmail: "alice@example.com",
+      }),
+    ).resolves.toEqual({
+      depleted: false,
+      monthlyRemaining: Number.POSITIVE_INFINITY,
     });
   });
 
-  it("returns false without retrying when org lacks paid plan", async () => {
-    checkMock.mockResolvedValue({ allowed: false });
-
-    await expect(customerHasPaidPlan("org_123")).resolves.toBe(false);
-    expect(checkMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("recovers from a degraded negative read when retryDenied is set", async () => {
-    vi.useFakeTimers();
-    checkMock
-      .mockResolvedValueOnce({ allowed: false })
-      .mockResolvedValueOnce({ allowed: true });
-
-    const result = customerHasPaidPlan("org_123", { retryDenied: true });
-    await vi.runAllTimersAsync();
-
-    await expect(result).resolves.toBe(true);
-    expect(checkMock).toHaveBeenCalledTimes(2);
-  });
-
-  it("retries a missing monthly balance once", async () => {
-    vi.useFakeTimers();
-    let monthlyChecks = 0;
-    checkMock.mockImplementation(
-      async ({ featureId }: { featureId: string }) => {
-        if (featureId === AUTUMN_SEO_DATA_TOPUP_BALANCE_FEATURE_ID) {
-          return { balance: null };
-        }
-        if (featureId === AUTUMN_SEO_DATA_BALANCE_FEATURE_ID) {
-          monthlyChecks += 1;
-          return monthlyChecks === 1
-            ? { balance: null }
-            : { balance: { remaining: 250 } };
-        }
-        throw new Error(`Unexpected feature ${featureId}`);
-      },
-    );
-
-    const result = assertUsageCreditsAvailable("org_123");
-    await vi.runAllTimersAsync();
-
-    await expect(result).resolves.toEqual({ monthlyRemaining: 250 });
-    expect(monthlyChecks).toBe(2);
-  });
-
-  it("fails closed when the retry still has no monthly balance", async () => {
-    vi.useFakeTimers();
-    checkMock.mockResolvedValue({ balance: null });
-
-    const result = assertUsageCreditsAvailable("org_123");
-    const assertion = expect(result).rejects.toMatchObject({
-      code: "UPSTREAM_UNAVAILABLE",
+  it("always allows usage credit spend", async () => {
+    await expect(assertUsageCreditsAvailable("org_123")).resolves.toEqual({
+      monthlyRemaining: Number.POSITIVE_INFINITY,
     });
-    await vi.runAllTimersAsync();
+  });
 
-    await assertion;
-    expect(checkMock).toHaveBeenCalledTimes(3);
+  it("no-ops trackUsageCreditSpend", async () => {
+    await expect(
+      trackUsageCreditSpend({
+        customer: {
+          organizationId: "org_123",
+          userId: "user_123",
+          userEmail: "alice@example.com",
+        },
+        customerId: "org_123",
+        creditFeature: "backlinks",
+        costUsd: 0.05,
+        monthlyRemaining: 100,
+      }),
+    ).resolves.toBeUndefined();
   });
 
   it("looks up the billing customer by organization id", async () => {

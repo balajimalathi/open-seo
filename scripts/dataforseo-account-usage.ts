@@ -1,6 +1,10 @@
 import process from "node:process";
 import type { AppendixStatisticsRatesDataInfo } from "dataforseo-client";
 import { fetchUserData } from "@/server/lib/dataforseo/appendix";
+import {
+  DATAFORSEO_FUNCTION_TOTALS,
+  mapDataforseoAccountUsage,
+} from "@/shared/dataforseo-account-usage";
 import { loadLocalEnv, parseArgs } from "./cli-utils";
 
 loadLocalEnv();
@@ -36,37 +40,20 @@ async function main() {
     return;
   }
 
-  const money = account.money;
+  const usage = mapDataforseoAccountUsage(account);
   console.log("DataForSEO account usage");
   console.log("========================");
-  console.log(`Login:            ${account.login ?? "(unknown)"}`);
-  if (account.timezone) console.log(`Timezone:         ${account.timezone}`);
-  console.log(`Deposited total:  ${formatUsd(money?.total)}`);
-  console.log(`Balance left:     ${formatUsd(money?.balance)}`);
+  console.log(`Login:            ${usage.login ?? "(unknown)"}`);
+  if (usage.timezone) console.log(`Timezone:         ${usage.timezone}`);
+  console.log(`Deposited total:  ${formatUsd(usage.depositedTotalUsd)}`);
+  console.log(`Balance left:     ${formatUsd(usage.balanceUsd)}`);
 
-  printFunctionTable("Spend by function — rolling DAY", money?.statistics?.day);
+  printFunctionTable("Spend by function — rolling DAY", account.money?.statistics?.day);
   printFunctionTable(
     "Spend by function — rolling MINUTE",
-    money?.statistics?.minute,
+    account.money?.statistics?.minute,
   );
 }
-
-// DataForSEO groups spend under `total_<function>` keys on each statistics
-// window. Field names mirror the SDK's AppendixStatisticsRatesDataInfo.
-const FUNCTION_TOTALS: ReadonlyArray<{ label: string; key: string }> = [
-  { label: "serp", key: "total_serp" },
-  { label: "keywords_data", key: "total_keywords_data" },
-  { label: "dataforseo_labs", key: "total_dataforseo_labs" },
-  { label: "backlinks", key: "total_backlinks" },
-  { label: "on_page", key: "total_on_page" },
-  { label: "business_data", key: "total_business_data" },
-  { label: "domain_analytics", key: "total_domain_analytics" },
-  { label: "merchant", key: "total_merchant" },
-  { label: "app_data", key: "total_app_data" },
-  { label: "content_analysis", key: "total_content_analysis" },
-  { label: "content_generation", key: "total_content_generation" },
-  { label: "appendix", key: "total_appendix" },
-];
 
 function printFunctionTable(
   heading: string,
@@ -81,7 +68,7 @@ function printFunctionTable(
   }
   if (stats.value) console.log(`Window: ${stats.value}`);
 
-  const rows = FUNCTION_TOTALS.map(({ label, key }) => ({
+  const rows = DATAFORSEO_FUNCTION_TOTALS.map(({ label, key }) => ({
     function: label,
     spend: readNumber(stats[key]),
   })).filter((row) => row.spend > 0);
@@ -94,7 +81,6 @@ function printFunctionTable(
     }
   }
 
-  // Prefer the API's own grand total; fall back to the summed rows.
   const total =
     readNumber(stats.total) || rows.reduce((sum, row) => sum + row.spend, 0);
   console.log(`  ${"TOTAL".padEnd(20)} ${formatUsd(total)}`);
@@ -104,7 +90,7 @@ function readNumber(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
-function formatUsd(value: number | undefined): string {
+function formatUsd(value: number | null | undefined): string {
   if (typeof value !== "number" || !Number.isFinite(value)) return "$0.00";
   return `$${value.toFixed(2)}`;
 }

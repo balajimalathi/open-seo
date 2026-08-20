@@ -5,7 +5,6 @@ const navLinks = [
   { label: "Features", to: "/features" },
   { label: "Blog", to: "/blogs" },
   { label: "Docs", to: "/docs" },
-  { label: "Pricing", to: "/pricing" },
 ] as const;
 
 export function BlogLayout({ children }: { children: ReactNode }) {
@@ -29,9 +28,7 @@ export function BlogLayout({ children }: { children: ReactNode }) {
                 key={link.to}
                 to={link.to}
                 className={`shrink-0 transition-colors hover:text-neutral-950 ${
-                  link.label === "Features" || link.label === "Pricing"
-                    ? "hidden sm:inline"
-                    : ""
+                  link.label === "Features" ? "hidden sm:inline" : ""
                 }`}
                 activeProps={{ className: "text-neutral-950" }}
               >

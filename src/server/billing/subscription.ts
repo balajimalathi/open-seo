@@ -1,17 +1,7 @@
 import { env } from "cloudflare:workers";
 import type { EnsuredUserContext } from "@/middleware/ensure-user/types";
-import {
-  AUTUMN_MANAGED_ACCESS_FEATURE_ID,
-  AUTUMN_PAID_PLAN_FEATURE_ID,
-  AUTUMN_SEO_DATA_BALANCE_FEATURE_ID,
-  AUTUMN_SEO_DATA_CREDITS_PER_USD,
-  AUTUMN_SEO_DATA_TOPUP_BALANCE_FEATURE_ID,
-  SEO_DATA_COST_MARKUP,
-  roundUsdForBilling,
-} from "@/shared/billing";
 import type { CreditFeature } from "@/shared/billing-credit-features";
-import { autumn, AUTUMN_TRACK_RETRY_OPTIONS } from "@/server/billing/autumn";
-import { captureServerEvent } from "@/server/lib/posthog";
+import { autumn } from "@/server/billing/autumn";
 import { AppError } from "@/server/lib/errors";
 
 export type BillingCustomerContext = Pick<
@@ -63,170 +53,43 @@ export async function getOrCreateOrganizationCustomer(
   return { id: customer.id };
 }
 
+// Personal / single-operator deployments do not use Autumn plans. Always
+// grant paid + managed access so features are not gated on a subscription.
 export async function customerHasPaidPlan(
-  customerId: string,
-  opts: { retryDenied?: boolean } = {},
+  _customerId: string,
+  _opts: { retryDenied?: boolean } = {},
 ) {
-  const result = await autumn.check({
-    customerId,
-    featureId: AUTUMN_PAID_PLAN_FEATURE_ID,
-  });
-  if (result.allowed || !opts.retryDenied) return result.allowed;
-
-  // Autumn sometimes returns degraded entitlement data in a successful
-  // response (see the balance retry in getUsageCreditsRemaining). Where a
-  // false negative does lasting damage — the scheduler would advance a paying
-  // org's schedule and flag "plan_required" — callers opt into one re-check.
-  // Interactive deny paths skip it to stay fast for genuinely free users.
-  await new Promise((resolve) => setTimeout(resolve, 300));
-  const retry = await autumn.check({
-    customerId,
-    featureId: AUTUMN_PAID_PLAN_FEATURE_ID,
-  });
-  return retry.allowed;
+  return true;
 }
 
-export async function customerHasManagedAccess(customerId: string) {
-  const result = await autumn.check({
-    customerId,
-    featureId: AUTUMN_MANAGED_ACCESS_FEATURE_ID,
-  });
-
-  return result.allowed;
+export async function customerHasManagedAccess(_customerId: string) {
+  return true;
 }
 
-// Remaining shared usage credits — the monthly `usage_credits` balance plus the
-// rolled-over `topup_credits` balance. Both DataForSEO and LLM spend draw from
-// these (the `seo_data_usage` and `llm_usage` features both map into them).
-async function getUsageCreditsRemaining(customerId: string): Promise<{
-  monthlyRemaining: number;
-  topupRemaining: number;
-}> {
-  const [monthlyCheck, topupCheck] = await Promise.all([
-    autumn.check({ customerId, featureId: AUTUMN_SEO_DATA_BALANCE_FEATURE_ID }),
-    autumn.check({
-      customerId,
-      featureId: AUTUMN_SEO_DATA_TOPUP_BALANCE_FEATURE_ID,
-    }),
-  ]);
-
-  // Autumn sometimes returns a successful response with no monthly balance
-  // for a customer that holds the feature. Retry that read once because the
-  // SDK's retry policy only covers failed HTTP requests.
-  let monthlyBalance = monthlyCheck.balance;
-  if (!monthlyBalance) {
-    await new Promise((resolve) => setTimeout(resolve, 300));
-    const retry = await autumn.check({
-      customerId,
-      featureId: AUTUMN_SEO_DATA_BALANCE_FEATURE_ID,
-    });
-    monthlyBalance = retry.balance;
-  }
-
-  // Every hosted org holds the monthly feature (the free plan is the Autumn
-  // default, attached at customer creation), so a check with no balance data
-  // is a broken read, not an empty wallet. Throwing keeps it out of the
-  // credit math — coercing it to 0 once locked a paying customer with ~9k
-  // credits out of chat (2026-07-20). The topup balance genuinely doesn't
-  // exist until a first top-up, so 0 is the honest reading there.
-  if (!monthlyBalance) {
-    throw new AppError(
-      "UPSTREAM_UNAVAILABLE",
-      `Autumn check returned no ${AUTUMN_SEO_DATA_BALANCE_FEATURE_ID} balance for customer ${customerId}`,
-    );
-  }
-
-  return {
-    monthlyRemaining: monthlyBalance.remaining,
-    topupRemaining: topupCheck.balance?.remaining ?? 0,
-  };
-}
-
-/**
- * Depletion check for the chat-agent gates. A /check reading ≤ 0 is not
- * trusted on its own: Autumn has served a stale balance transiently
- * (2026-07-20, minutes after a customer's free→paid upgrade), and a false
- * refusal locks the customer out of chat. When the check reads depleted,
- * confirm against the full customer object — a separate Autumn read path —
- * and refuse only when both agree. A disagreement means Autumn served
- * inconsistent balances: the turn proceeds on the confirmed reading and the
- * inconsistency is logged at error level so it lands in Workers error
- * tracking, not buried in analytics. Confirmed refusals emit a PostHog event (paywall
- * analytics — refusals used to be invisible everywhere).
- */
+// OpenSEO usage credits are disabled for personal use; DataForSEO bills the
+// configured API key directly. These helpers stay as no-ops so callers keep
+// compiling without Autumn round-trips.
 export async function checkUsageCreditsDepleted(
-  customer: BillingCustomerContext,
+  _customer: BillingCustomerContext,
 ): Promise<{ depleted: boolean; monthlyRemaining: number }> {
-  const check = await getUsageCreditsRemaining(customer.organizationId);
-  if (check.monthlyRemaining + check.topupRemaining > 0) {
-    return { depleted: false, monthlyRemaining: check.monthlyRemaining };
-  }
-
-  // No try/catch: if this second read fails while the first said depleted,
-  // the whole gate errors rather than guessing — the turn fails generically
-  // and retryably instead of refusing with a possibly-false paywall.
-  const full = await autumn.customers.getOrCreate({
-    customerId: customer.organizationId,
-    email: customer.userEmail,
-  });
-  const confirmed = {
-    monthlyRemaining:
-      full.balances[AUTUMN_SEO_DATA_BALANCE_FEATURE_ID]?.remaining ?? 0,
-    topupRemaining:
-      full.balances[AUTUMN_SEO_DATA_TOPUP_BALANCE_FEATURE_ID]?.remaining ?? 0,
-  };
-
-  if (confirmed.monthlyRemaining + confirmed.topupRemaining > 0) {
-    console.error(
-      "billing.credits-gate disagreement: /check read depleted but the " +
-        "customer object shows credits; proceeding on the customer reading",
-      {
-        organizationId: customer.organizationId,
-        check,
-        confirmed,
-      },
-    );
-    return { depleted: false, monthlyRemaining: confirmed.monthlyRemaining };
-  }
-
-  await captureServerEvent({
-    distinctId: customer.userId,
-    event: "usage:credits_gate_refused",
-    organizationId: customer.organizationId,
-    properties: {
-      project_id: customer.projectId,
-      monthly_remaining: confirmed.monthlyRemaining,
-      topup_remaining: confirmed.topupRemaining,
-    },
-  });
-  return { depleted: true, monthlyRemaining: check.monthlyRemaining };
+  return { depleted: false, monthlyRemaining: Number.POSITIVE_INFINITY };
 }
 
 /**
- * Throws INSUFFICIENT_CREDITS when the org has no usage/topup credits left.
- * Returns the monthly remaining so a caller can split spend monthly-first.
+ * Previously threw INSUFFICIENT_CREDITS when the org had no Autumn credits.
+ * Always allows spend for personal deployments.
  */
 export async function assertUsageCreditsAvailable(
-  customerId: string,
+  _customerId: string,
 ): Promise<{ monthlyRemaining: number }> {
-  const { monthlyRemaining, topupRemaining } =
-    await getUsageCreditsRemaining(customerId);
-
-  if (monthlyRemaining + topupRemaining <= 0) {
-    throw new AppError("INSUFFICIENT_CREDITS");
-  }
-
-  return { monthlyRemaining };
+  return { monthlyRemaining: Number.POSITIVE_INFINITY };
 }
 
 /**
- * Deducts a USD provider cost from the org's shared usage-credit pool: applies
- * the platform markup, converts to credits, spends monthly `usage_credits`
- * first then `topup_credits`, and emits the usage:credits_consume event. Both
- * DataForSEO and onboarding-LLM spend route through here, so they draw from the
- * one pool. Pass `monthlyRemaining` from the balance check that gated the call.
+ * Previously deducted marked-up spend from Autumn usage/topup pools.
+ * No-op: personal deployments pay DataForSEO directly.
  */
-export async function trackUsageCreditSpend(args: {
+export async function trackUsageCreditSpend(_args: {
   customer: BillingCustomerContext;
   customerId: string;
   creditFeature: CreditFeature;
@@ -234,69 +97,5 @@ export async function trackUsageCreditSpend(args: {
   monthlyRemaining: number;
   properties?: Record<string, unknown>;
 }): Promise<void> {
-  const totalCostUsd = roundUsdForBilling(args.costUsd * SEO_DATA_COST_MARKUP);
-  const totalCostCredits = Math.ceil(
-    totalCostUsd * AUTUMN_SEO_DATA_CREDITS_PER_USD,
-  );
-  if (totalCostCredits <= 0) return;
-
-  // Clamp at 0: Autumn balances can read negative after an overdraft, and a
-  // negative monthly reading here would inflate the topup deduction.
-  const monthlyDeduct = Math.min(
-    Math.max(args.monthlyRemaining, 0),
-    totalCostCredits,
-  );
-  const topupDeduct = totalCostCredits - monthlyDeduct;
-
-  const properties = {
-    currency: "USD",
-    creditFeature: args.creditFeature,
-    totalCostUsd,
-    totalCostCredits,
-    ...args.properties,
-  };
-
-  if (monthlyDeduct > 0) {
-    await autumn.track(
-      {
-        customerId: args.customerId,
-        featureId: AUTUMN_SEO_DATA_BALANCE_FEATURE_ID,
-        value: monthlyDeduct,
-        properties: {
-          ...properties,
-          balanceFeatureId: AUTUMN_SEO_DATA_BALANCE_FEATURE_ID,
-        },
-      },
-      AUTUMN_TRACK_RETRY_OPTIONS,
-    );
-  }
-
-  if (topupDeduct > 0) {
-    await autumn.track(
-      {
-        customerId: args.customerId,
-        featureId: AUTUMN_SEO_DATA_TOPUP_BALANCE_FEATURE_ID,
-        value: topupDeduct,
-        properties: {
-          ...properties,
-          balanceFeatureId: AUTUMN_SEO_DATA_TOPUP_BALANCE_FEATURE_ID,
-        },
-      },
-      AUTUMN_TRACK_RETRY_OPTIONS,
-    );
-  }
-
-  await captureServerEvent({
-    distinctId: args.customer.userId,
-    event: "usage:credits_consume",
-    organizationId: args.customer.organizationId,
-    properties: {
-      project_id: args.customer.projectId,
-      credit_feature: args.creditFeature,
-      monthly_credits: monthlyDeduct,
-      topup_credits: topupDeduct,
-      total_credits: totalCostCredits,
-      cost_usd: totalCostUsd,
-    },
-  });
+  return;
 }

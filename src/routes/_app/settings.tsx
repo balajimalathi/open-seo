@@ -3,12 +3,15 @@ import { Monitor, Moon, Sun } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { ApiKeySettings } from "@/client/features/settings/ApiKeySettings";
+import { GoogleConnectionsSettings } from "@/client/features/settings/GoogleConnectionsSettings";
 import { type ThemePreference, useThemePreference } from "@/client/lib/theme";
 import { authClient, useSession } from "@/lib/auth-client";
 import { isHostedClientAuthMode } from "@/lib/auth-mode";
+import { googleOAuthCallbackSearchSchema } from "@/shared/google-oauth";
 import { version } from "../../../package.json";
 
 export const Route = createFileRoute("/_app/settings")({
+  validateSearch: googleOAuthCallbackSearchSchema,
   component: SettingsPage,
 });
 
@@ -89,6 +92,8 @@ function SettingsPage() {
             </div>
           </div>
         </section>
+
+        <GoogleConnectionsSettings />
 
         {isHosted ? (
           <>

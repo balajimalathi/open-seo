@@ -2,8 +2,14 @@ import { toast } from "sonner";
 import { getStandardErrorMessage } from "@/client/lib/error-messages";
 import { authClient } from "@/lib/auth-client";
 import { isHostedClientAuthMode } from "@/lib/auth-mode";
-import { startSelfHostedGa4Link } from "@/serverFunctions/ga4";
-import { startSelfHostedGscLink } from "@/serverFunctions/gsc";
+import {
+  startGa4GrantRelease,
+  startSelfHostedGa4Link,
+} from "@/serverFunctions/ga4";
+import {
+  startGscGrantRelease,
+  startSelfHostedGscLink,
+} from "@/serverFunctions/gsc";
 import { GA4_OAUTH_PROVIDER_ID } from "@/shared/ga4";
 import { GSC_OAUTH_PROVIDER_ID } from "@/shared/gsc";
 
@@ -11,10 +17,12 @@ const googleProviders = {
   gsc: {
     providerId: GSC_OAUTH_PROVIDER_ID,
     startSelfHosted: startSelfHostedGscLink,
+    startRelease: startGscGrantRelease,
   },
   ga4: {
     providerId: GA4_OAUTH_PROVIDER_ID,
     startSelfHosted: startSelfHostedGa4Link,
+    startRelease: startGa4GrantRelease,
   },
 } as const;
 
@@ -40,12 +48,28 @@ export async function startGoogleLink(
     const res = await authClient.oauth2.link({
       providerId: config.providerId,
       callbackURL,
+      errorCallbackURL: callbackURL,
     });
     if (res.error) {
       toast.error(res.error.message ?? "Could not start Google sign-in");
       return;
     }
     if (res.data?.url) window.location.href = res.data.url;
+  } catch (error) {
+    toast.error(getStandardErrorMessage(error));
+  }
+}
+
+/** Prove Google identity and release any OpenSEO grant for that Google account. */
+export async function startGoogleGrantRelease(
+  provider: "gsc" | "ga4",
+  callbackURL: string,
+): Promise<void> {
+  try {
+    const res = await googleProviders[provider].startRelease({
+      data: { callbackURL },
+    });
+    window.location.href = res.url;
   } catch (error) {
     toast.error(getStandardErrorMessage(error));
   }

@@ -5,6 +5,7 @@ import { ChevronLeft } from "lucide-react";
 import { toast } from "sonner";
 import { SearchConsoleConnectionCard } from "@/client/features/gsc/SearchConsoleConnectionCard";
 import { GoogleAnalyticsConnectionCard } from "@/client/features/ga4/GoogleAnalyticsConnectionCard";
+import { useGoogleOAuthCallbackFeedback } from "@/client/features/integrations/useGoogleOAuthCallbackFeedback";
 import { ProjectMarketFields } from "@/client/features/projects/ProjectMarketFields";
 import { getStandardErrorMessage } from "@/client/lib/error-messages";
 import {
@@ -19,6 +20,7 @@ import {
 import type { ProjectSummary } from "./types";
 
 export function ProjectSettings({ projectId }: { projectId: string }) {
+  const { alreadyLinked } = useGoogleOAuthCallbackFeedback();
   const projectsQuery = useQuery({
     queryKey: ["projects"],
     queryFn: () => getProjects(),
@@ -59,12 +61,16 @@ export function ProjectSettings({ projectId }: { projectId: string }) {
         <h2 className="text-sm font-medium text-base-content/50">
           Search Console
         </h2>
-        <SearchConsoleConnectionCard projectId={projectId} />
+        <SearchConsoleConnectionCard
+          projectId={projectId}
+          alreadyLinked={alreadyLinked}
+        />
       </section>
 
       <section id="google-analytics" className="space-y-3 scroll-mt-6">
         <GoogleAnalyticsConnectionCard
           projectId={projectId}
+          alreadyLinked={alreadyLinked}
           heading={
             <h2 className="text-sm font-medium text-base-content/50">
               Analytics

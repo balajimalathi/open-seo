@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   insertValues: vi.fn(),
   updateSet: vi.fn(),
   getAuth: vi.fn(),
+  releaseGrantForGoogleAccount: vi.fn(),
 }));
 
 vi.mock("cloudflare:workers", () => ({ env: {} }));
@@ -46,6 +47,11 @@ vi.mock("@/server/features/google/oauth-config", () => ({
   getGoogleOAuthClientConfig: mocks.getGoogleOAuthClientConfig,
   hasSelfHostedGoogleOAuthConfig: mocks.hasSelfHostedGoogleOAuthConfig,
 }));
+vi.mock("@/server/features/google/GoogleGrantService", () => ({
+  GoogleGrantService: {
+    releaseGrantForGoogleAccount: mocks.releaseGrantForGoogleAccount,
+  },
+}));
 
 const user = { userId: "user-1", userEmail: "user@example.com" };
 const publicOrigin = "http://localhost:3001";
@@ -53,6 +59,7 @@ const callbackURL = `${publicOrigin}/p/project/settings`;
 
 async function authorizationState(
   integration: SelfHostedGoogleOAuthIntegration,
+  purpose?: "link" | "release",
 ) {
   const url = new URL(
     await createSelfHostedGoogleAuthorizationUrl({
@@ -60,6 +67,7 @@ async function authorizationState(
       user,
       callbackURL,
       publicOrigin,
+      purpose,
     }),
   );
   return url.searchParams.get("state")!;
@@ -87,6 +95,7 @@ describe("self-hosted Google OAuth providers", () => {
     mocks.hasSelfHostedGoogleOAuthConfig.mockResolvedValue(true);
     mocks.selectLimit.mockResolvedValue([]);
     mocks.insertValues.mockResolvedValue(undefined);
+    mocks.releaseGrantForGoogleAccount.mockReset().mockResolvedValue(undefined);
     mocks.getAuth.mockReturnValue({
       $context: Promise.resolve({
         options: { account: { encryptOAuthTokens: false } },
@@ -231,5 +240,94 @@ describe("self-hosted Google OAuth providers", () => {
         accessToken: "gsc-token",
       }),
     );
+  });
+
+  it("redirects instead of inserting when the Google account is owned by another user", async () => {
+    mocks.selectLimit.mockResolvedValue([
+      { id: "acc-1", userId: "other-user", refreshToken: null },
+    ]);
+    const state = await authorizationState(GSC_INTEGRATION);
+    const idToken = `header.${btoa(JSON.stringify({ sub: "gsc-account-1" }))}.signature`;
+    mocks.fetch.mockResolvedValue(
+      new Response(
+        JSON.stringify({ access_token: "gsc-token", id_token: idToken }),
+        { status: 200 },
+      ),
+    );
+
+    const response = await handleSelfHostedGoogleOAuthCallback({
+      integration: GSC_INTEGRATION,
+      request: callbackRequest(GSC_INTEGRATION, state, { code: "gsc-code" }),
+      user,
+      publicOrigin,
+    });
+
+    expect(response.status).toBe(303);
+    expect(response.headers.get("Location")).toBe(
+      "/p/project/settings?error=account_already_linked_to_different_user",
+    );
+    expect(mocks.insertValues).not.toHaveBeenCalled();
+  });
+
+  it("releases a grant without upserting when purpose is release", async () => {
+    const state = await authorizationState(GSC_INTEGRATION, "release");
+    const idToken = `header.${btoa(JSON.stringify({ sub: "gsc-account-1" }))}.signature`;
+    mocks.fetch.mockResolvedValue(
+      new Response(
+        JSON.stringify({ access_token: "gsc-token", id_token: idToken }),
+        { status: 200 },
+      ),
+    );
+
+    const response = await handleSelfHostedGoogleOAuthCallback({
+      integration: GSC_INTEGRATION,
+      request: callbackRequest(GSC_INTEGRATION, state, { code: "gsc-code" }),
+      user,
+      publicOrigin,
+    });
+
+    expect(response.status).toBe(303);
+    expect(response.headers.get("Location")).toBe(
+      "/p/project/settings?grantReleased=1",
+    );
+    expect(mocks.releaseGrantForGoogleAccount).toHaveBeenCalledWith({
+      providerId: "google-search-console",
+      googleAccountId: "gsc-account-1",
+    });
+    expect(mocks.insertValues).not.toHaveBeenCalled();
+  });
+
+  it("404s hosted link callbacks and still allows release", async () => {
+    const linkState = await authorizationState(GSC_INTEGRATION);
+    const linkResponse = await handleSelfHostedGoogleOAuthCallback({
+      integration: GSC_INTEGRATION,
+      request: callbackRequest(GSC_INTEGRATION, linkState, { code: "code" }),
+      user,
+      publicOrigin,
+      hosted: true,
+    });
+    expect(linkResponse.status).toBe(404);
+    expect(mocks.fetch).not.toHaveBeenCalled();
+
+    const releaseState = await authorizationState(GSC_INTEGRATION, "release");
+    const idToken = `header.${btoa(JSON.stringify({ sub: "gsc-account-1" }))}.signature`;
+    mocks.fetch.mockResolvedValue(
+      new Response(
+        JSON.stringify({ access_token: "gsc-token", id_token: idToken }),
+        { status: 200 },
+      ),
+    );
+    const releaseResponse = await handleSelfHostedGoogleOAuthCallback({
+      integration: GSC_INTEGRATION,
+      request: callbackRequest(GSC_INTEGRATION, releaseState, {
+        code: "gsc-code",
+      }),
+      user,
+      publicOrigin,
+      hosted: true,
+    });
+    expect(releaseResponse.status).toBe(303);
+    expect(mocks.releaseGrantForGoogleAccount).toHaveBeenCalled();
+    expect(mocks.insertValues).not.toHaveBeenCalled();
   });
 });

@@ -8,7 +8,12 @@ import {
   SitePicker,
   type GscSiteSelection,
 } from "@/client/features/gsc/SitePicker";
-import { startGoogleLink } from "@/client/features/integrations/startGoogleLink";
+import {
+  startGoogleGrantRelease,
+  startGoogleLink,
+} from "@/client/features/integrations/startGoogleLink";
+import { GoogleGrantAlreadyLinkedNotice } from "@/client/features/integrations/GoogleGrantAlreadyLinkedNotice";
+import { useGoogleOAuthCallbackFeedback } from "@/client/features/integrations/useGoogleOAuthCallbackFeedback";
 import { getStandardErrorMessage } from "@/client/lib/error-messages";
 import { captureClientEvent } from "@/client/lib/posthog";
 import { ProjectMarketFields } from "@/client/features/projects/ProjectMarketFields";
@@ -105,6 +110,7 @@ function DefaultMarketPicker({
 /** Connect + pick-a-property flow, scoped to a known project. */
 function GscConnect({ projectId }: { projectId: string }) {
   const queryClient = useQueryClient();
+  const { alreadyLinked } = useGoogleOAuthCallbackFeedback();
   const [selection, setSelection] = React.useState<GscSiteSelection | null>(
     null,
   );
@@ -156,6 +162,8 @@ function GscConnect({ projectId }: { projectId: string }) {
     captureClientEvent("onboarding:gsc_connect_clicked");
     void startGoogleLink("gsc", window.location.href);
   };
+  const handleRelease = () =>
+    void startGoogleGrantRelease("gsc", window.location.href);
 
   if (connectionQuery.isLoading) return <Checking />;
 
@@ -193,14 +201,23 @@ function GscConnect({ projectId }: { projectId: string }) {
   }
 
   return (
-    <button
-      type="button"
-      onClick={handleConnect}
-      className="inline-flex items-center gap-2.5 rounded-lg border border-base-300 bg-base-100 px-4 py-2.5 text-sm font-semibold text-base-content shadow-sm transition hover:bg-base-200 hover:shadow focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
-    >
-      <GoogleGlyph className="size-[18px]" />
-      Connect with Google
-    </button>
+    <div className="space-y-4">
+      {alreadyLinked ? (
+        <GoogleGrantAlreadyLinkedNotice
+          integrationName="Search Console"
+          onRelease={handleRelease}
+          releasing={false}
+        />
+      ) : null}
+      <button
+        type="button"
+        onClick={handleConnect}
+        className="inline-flex items-center gap-2.5 rounded-lg border border-base-300 bg-base-100 px-4 py-2.5 text-sm font-semibold text-base-content shadow-sm transition hover:bg-base-200 hover:shadow focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+      >
+        <GoogleGlyph className="size-[18px]" />
+        Connect with Google
+      </button>
+    </div>
   );
 }
 

@@ -14,6 +14,10 @@ import { captureClientEvent } from "@/client/lib/posthog";
 import { queryClient } from "@/client/tanstack-db";
 import { useSession } from "@/lib/auth-client";
 import { saveOnboardingAnswers } from "@/serverFunctions/onboarding";
+import {
+  googleOAuthCallbackSearchSchema,
+  type GoogleOAuthCallbackSearch,
+} from "@/shared/google-oauth";
 
 const ONBOARDING_EXISTING_USER_CUTOFF = "2026-05-27T00:00:00.000Z";
 
@@ -26,9 +30,18 @@ export const Route = createFileRoute("/_authenticated/onboarding/")({
   // worker isolate cannot reuse another account's cached onboarding state.
   ssr: false,
   // Step lives in the URL so it survives refresh and works with back/forward.
-  validateSearch: (search: Record<string, unknown>): { step: number } => {
+  validateSearch: (
+    search: Record<string, unknown>,
+  ): { step: number } & GoogleOAuthCallbackSearch => {
     const raw = Number(search.step);
-    return { step: Number.isFinite(raw) ? clampStep(raw) : 0 };
+    const oauth = googleOAuthCallbackSearchSchema.parse({
+      error: typeof search.error === "string" ? search.error : undefined,
+      grantReleased:
+        typeof search.grantReleased === "string"
+          ? search.grantReleased
+          : undefined,
+    });
+    return { step: Number.isFinite(raw) ? clampStep(raw) : 0, ...oauth };
   },
   // Send users who already finished onboarding home before rendering. Running
   // this in beforeLoad (not a component effect) means it can't race with the

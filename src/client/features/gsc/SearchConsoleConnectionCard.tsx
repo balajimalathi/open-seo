@@ -7,14 +7,19 @@ import { captureClientEvent } from "@/client/lib/posthog";
 import { GoogleGlyph } from "@/client/features/gsc/GoogleGlyph";
 import { IntegrationConnectionCard } from "@/client/features/integrations/IntegrationConnectionCard";
 import { GoogleSearchConsoleLogo } from "@/client/features/integrations/GoogleProductLogos";
+import { GoogleGrantAlreadyLinkedNotice } from "@/client/features/integrations/GoogleGrantAlreadyLinkedNotice";
 import { SelfHostedSetupWarning } from "@/client/features/gsc/SelfHostedSetupWarning";
 import {
   SitePicker,
   type GscSiteSelection,
 } from "@/client/features/gsc/SitePicker";
-import { startGoogleLink } from "@/client/features/integrations/startGoogleLink";
+import {
+  startGoogleGrantRelease,
+  startGoogleLink,
+} from "@/client/features/integrations/startGoogleLink";
 import {
   disconnectGsc,
+  disconnectOwnGscGrant,
   getGscConnection,
   listGscSites,
   setGscSite,
@@ -24,8 +29,10 @@ const GRANT_STATUS_KEY = ["gscGrantStatus"];
 
 export function SearchConsoleConnectionCard({
   projectId,
+  alreadyLinked = false,
 }: {
   projectId: string;
+  alreadyLinked?: boolean;
 }) {
   const hosted = isHostedClientAuthMode();
   const queryClient = useQueryClient();
@@ -136,7 +143,21 @@ export function SearchConsoleConnectionCard({
     onError: (error) => toast.error(getStandardErrorMessage(error)),
   });
 
+  const disconnectOwnGrantMutation = useMutation({
+    mutationFn: () => disconnectOwnGscGrant({ data: {} }),
+    onSuccess: () => {
+      toast.success("Search Console disconnected");
+      setPicking(false);
+      setSelection(null);
+      void queryClient.invalidateQueries({ queryKey: connectionKey });
+      void queryClient.invalidateQueries({ queryKey: GRANT_STATUS_KEY });
+    },
+    onError: (error) => toast.error(getStandardErrorMessage(error)),
+  });
+
   const handleConnect = () => void startGoogleLink("gsc", window.location.href);
+  const handleRelease = () =>
+    void startGoogleGrantRelease("gsc", window.location.href);
 
   return (
     <IntegrationConnectionCard
@@ -187,17 +208,25 @@ export function SearchConsoleConnectionCard({
               : {
                   label: "Disconnect",
                   destructive: true,
-                  disabled: disconnectMutation.isPending,
-                  onClick: () => disconnectMutation.mutate(),
+                  disabled: disconnectOwnGrantMutation.isPending,
+                  onClick: () => disconnectOwnGrantMutation.mutate(),
                 }
           }
         />
       ) : (
         <div className="space-y-4">
-          <p className="text-sm text-base-content/70">
-            Connect GSC to see how your website is actually performing in Google
-            Search.
-          </p>
+          {alreadyLinked ? (
+            <GoogleGrantAlreadyLinkedNotice
+              integrationName="Search Console"
+              onRelease={handleRelease}
+              releasing={false}
+            />
+          ) : (
+            <p className="text-sm text-base-content/70">
+              Connect GSC to see how your website is actually performing in
+              Google Search.
+            </p>
+          )}
           <button
             type="button"
             onClick={handleConnect}

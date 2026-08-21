@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- signed state, token exchange, and callback stay together */
 import { symmetricEncrypt } from "better-auth/crypto";
 import { env } from "cloudflare:workers";
 import { and, eq } from "drizzle-orm";
@@ -7,13 +8,14 @@ import { db } from "@/db";
 import { account } from "@/db/schema";
 import { getAuth } from "@/lib/auth";
 import { getAuthMode, isHostedAuthMode } from "@/lib/auth-mode";
-import { resolveCloudflareAccessContext } from "@/middleware/ensure-user/cloudflareAccess";
-import { resolveLocalNoAuthContext } from "@/middleware/ensure-user/delegated";
+import { resolveUserContextFromHeaders } from "@/middleware/ensure-user/resolve";
 import { AppError } from "@/server/lib/errors";
 import { responseForAppError } from "@/server/lib/http-errors";
 import { getPublicOrigin } from "@/server/mcp/public-origin";
 import { GA4_OAUTH_PROVIDER_ID, GA4_OAUTH_SCOPES } from "@/shared/ga4";
+import { GOOGLE_ACCOUNT_ALREADY_LINKED_ERROR } from "@/shared/google-oauth";
 import { GSC_OAUTH_PROVIDER_ID, GSC_OAUTH_SCOPES } from "@/shared/gsc";
+import { GoogleGrantService } from "./GoogleGrantService";
 import {
   getGoogleOAuthClientConfig,
   hasSelfHostedGoogleOAuthConfig,
@@ -53,10 +55,14 @@ export const GA4_INTEGRATION: SelfHostedGoogleOAuthIntegration = {
   scopes: GA4_OAUTH_SCOPES,
 };
 
+const oauthPurposeSchema = z.enum(["link", "release"]);
+
 const oauthStateSchema = z.object({
   userId: z.string().min(1),
   callbackPath: z.string().min(1),
   exp: z.number().int(),
+  // Omitted on in-flight consents started before purpose existed.
+  purpose: oauthPurposeSchema.optional().default("link"),
 });
 
 const googleTokenResponseSchema = z.object({
@@ -119,12 +125,36 @@ function getSafeCallbackPath(callbackURL: string, publicOrigin: string) {
   }
 }
 
+function withCallbackQuery(
+  callbackPath: string,
+  params: Record<string, string>,
+) {
+  const url = new URL(callbackPath, "https://openseo.invalid");
+  for (const [key, value] of Object.entries(params)) {
+    url.searchParams.set(key, value);
+  }
+  return `${url.pathname}${url.search}${url.hash}`;
+}
+
+function redirectToCallback(
+  callbackPath: string,
+  params?: Record<string, string>,
+) {
+  return new Response(null, {
+    status: 303,
+    headers: {
+      Location: params ? withCallbackQuery(callbackPath, params) : callbackPath,
+    },
+  });
+}
+
 async function createState(input: {
   integration: SelfHostedGoogleOAuthIntegration;
   clientSecret: string;
   userId: string;
   callbackURL: string;
   publicOrigin: string;
+  purpose: z.infer<typeof oauthPurposeSchema>;
 }) {
   const payload = bytesToBase64Url(
     new TextEncoder().encode(
@@ -135,6 +165,7 @@ async function createState(input: {
           input.publicOrigin,
         ),
         exp: Date.now() + 10 * 60 * 1_000,
+        purpose: input.purpose,
       }),
     ),
   );
@@ -203,7 +234,7 @@ async function upsertGrant(input: {
   integration: SelfHostedGoogleOAuthIntegration;
   user: SelfHostedGoogleUser;
   tokens: GoogleTokenResponse;
-}) {
+}): Promise<"ok" | "already_linked"> {
   const ctx = await getAuth().$context;
   const encrypt = (value: string) =>
     ctx.options.account?.encryptOAuthTokens
@@ -211,16 +242,22 @@ async function upsertGrant(input: {
       : value;
   const googleAccountId = getGoogleAccountId(input.tokens);
   const existing = await db
-    .select({ id: account.id, refreshToken: account.refreshToken })
+    .select({
+      id: account.id,
+      userId: account.userId,
+      refreshToken: account.refreshToken,
+    })
     .from(account)
     .where(
       and(
-        eq(account.userId, input.user.userId),
         eq(account.providerId, input.integration.providerId),
         eq(account.accountId, googleAccountId),
       ),
     )
     .limit(1);
+  if (existing[0] && existing[0].userId !== input.user.userId) {
+    return "already_linked";
+  }
   const accountValues = {
     accountId: googleAccountId,
     providerId: input.integration.providerId,
@@ -246,7 +283,7 @@ async function upsertGrant(input: {
       .update(account)
       .set({ ...accountValues, updatedAt: new Date() })
       .where(eq(account.id, existing[0].id));
-    return;
+    return "ok";
   }
   await db.insert(account).values({
     id: crypto.randomUUID(),
@@ -254,6 +291,7 @@ async function upsertGrant(input: {
     createdAt: new Date(),
     updatedAt: new Date(),
   });
+  return "ok";
 }
 
 async function exchangeCode(input: {
@@ -288,6 +326,7 @@ export async function createSelfHostedGoogleAuthorizationUrl(input: {
   user: SelfHostedGoogleUser;
   callbackURL: string;
   publicOrigin: string;
+  purpose?: z.infer<typeof oauthPurposeSchema>;
 }) {
   const config = await getGoogleOAuthClientConfig();
   if (!config || !(await hasSelfHostedGoogleOAuthConfig(config))) {
@@ -303,6 +342,7 @@ export async function createSelfHostedGoogleAuthorizationUrl(input: {
     userId: input.user.userId,
     callbackURL: input.callbackURL,
     publicOrigin: input.publicOrigin,
+    purpose: input.purpose ?? "link",
   });
   const url = new URL(GOOGLE_AUTH_URL);
   url.searchParams.set("client_id", config.clientId);
@@ -320,7 +360,9 @@ export async function handleSelfHostedGoogleOAuthCallback(input: {
   request: Request;
   user: SelfHostedGoogleUser;
   publicOrigin: string;
+  hosted?: boolean;
 }) {
+  const hosted = input.hosted ?? isHostedAuthMode(getAuthMode(env.AUTH_MODE));
   const config = await getGoogleOAuthClientConfig();
   if (!config) {
     return new Response(
@@ -343,6 +385,9 @@ export async function handleSelfHostedGoogleOAuthCallback(input: {
     clientSecret: config.clientSecret,
     integration: input.integration,
   });
+  if (hosted && state.purpose !== "release") {
+    return new Response("Not found", { status: 404 });
+  }
   if (state.userId !== input.user.userId) {
     return new Response(
       `${input.integration.displayName} OAuth user mismatch`,
@@ -351,12 +396,9 @@ export async function handleSelfHostedGoogleOAuthCallback(input: {
       },
     );
   }
-  const redirectToCallback = () =>
-    new Response(null, {
-      status: 303,
-      headers: { Location: state.callbackPath },
-    });
-  if (url.searchParams.get("error")) return redirectToCallback();
+  if (url.searchParams.get("error")) {
+    return redirectToCallback(state.callbackPath);
+  }
   const code = url.searchParams.get("code");
   if (!code) {
     return new Response(`Missing ${input.integration.displayName} OAuth code`, {
@@ -370,12 +412,24 @@ export async function handleSelfHostedGoogleOAuthCallback(input: {
     clientSecret: config.clientSecret,
     redirectUri: getRedirectUri(input.publicOrigin, input.integration),
   });
-  await upsertGrant({
+  if (state.purpose === "release") {
+    await GoogleGrantService.releaseGrantForGoogleAccount({
+      providerId: input.integration.providerId,
+      googleAccountId: getGoogleAccountId(tokens),
+    });
+    return redirectToCallback(state.callbackPath, { grantReleased: "1" });
+  }
+  const result = await upsertGrant({
     integration: input.integration,
     user: input.user,
     tokens,
   });
-  return redirectToCallback();
+  if (result === "already_linked") {
+    return redirectToCallback(state.callbackPath, {
+      error: GOOGLE_ACCOUNT_ALREADY_LINKED_ERROR,
+    });
+  }
+  return redirectToCallback(state.callbackPath);
 }
 
 export async function handleSelfHostedGoogleOAuthCallbackRequest(
@@ -383,14 +437,8 @@ export async function handleSelfHostedGoogleOAuthCallbackRequest(
   integration: SelfHostedGoogleOAuthIntegration,
 ) {
   try {
-    const authMode = getAuthMode(env.AUTH_MODE);
-    if (isHostedAuthMode(authMode)) {
-      return new Response("Not found", { status: 404 });
-    }
-    const context =
-      authMode === "local_noauth"
-        ? await resolveLocalNoAuthContext()
-        : await resolveCloudflareAccessContext(request.headers);
+    const hosted = isHostedAuthMode(getAuthMode(env.AUTH_MODE));
+    const context = await resolveUserContextFromHeaders(request.headers);
     return await handleSelfHostedGoogleOAuthCallback({
       integration,
       request,
@@ -399,6 +447,7 @@ export async function handleSelfHostedGoogleOAuthCallbackRequest(
         userEmail: context.userEmail,
       },
       publicOrigin: getPublicOrigin(request),
+      hosted,
     });
   } catch (error) {
     return responseForAppError(

@@ -3,11 +3,13 @@ import { getRequest } from "@tanstack/react-start/server";
 import { waitUntil } from "cloudflare:workers";
 import { z } from "zod";
 import { Ga4Service } from "@/server/features/ga4/services/Ga4Service";
+import { GoogleGrantService } from "@/server/features/google/GoogleGrantService";
 import { hasSelfHostedGoogleOAuthConfig } from "@/server/features/google/oauth-config";
 import {
   createSelfHostedGoogleAuthorizationUrl,
   GA4_INTEGRATION,
 } from "@/server/features/google/selfHostedOAuth";
+import { GA4_OAUTH_PROVIDER_ID } from "@/shared/ga4";
 import { isHostedServerAuthMode } from "@/server/lib/runtime-env";
 import { captureServerEvent } from "@/server/lib/posthog";
 import { getPublicOrigin } from "@/server/mcp/public-origin";
@@ -23,6 +25,9 @@ const setPropertySchema = projectScopedSchema.extend({
 });
 const startSelfHostedLinkSchema = z.object({
   callbackURL: z.string().min(1),
+});
+const grantAccountSchema = z.object({
+  accountId: z.string().min(1).optional(),
 });
 
 export const getGa4Connection = createServerFn({ method: "POST" })
@@ -127,5 +132,50 @@ export const startSelfHostedGa4Link = createServerFn({ method: "POST" })
       },
       callbackURL: data.callbackURL,
       publicOrigin: getPublicOrigin(getRequest()),
+    }),
+  }));
+
+export const listGa4Grants = createServerFn({ method: "GET" })
+  .middleware(requireAuthenticatedContext)
+  .handler(async ({ context }) => {
+    const grants = await GoogleGrantService.listGrants(
+      context.userId,
+      GA4_OAUTH_PROVIDER_ID,
+    );
+    return { grants };
+  });
+
+export const disconnectOwnGa4Grant = createServerFn({ method: "POST" })
+  .middleware(requireAuthenticatedContext)
+  .validator(grantAccountSchema)
+  .handler(async ({ data, context }) => {
+    if (data.accountId) {
+      await GoogleGrantService.disconnectOwnGrant({
+        userId: context.userId,
+        providerId: GA4_OAUTH_PROVIDER_ID,
+        googleAccountId: data.accountId,
+      });
+    } else {
+      await GoogleGrantService.disconnectAllOwnGrants(
+        context.userId,
+        GA4_OAUTH_PROVIDER_ID,
+      );
+    }
+    return { connected: false as const };
+  });
+
+export const startGa4GrantRelease = createServerFn({ method: "POST" })
+  .middleware(requireAuthenticatedContext)
+  .validator(startSelfHostedLinkSchema)
+  .handler(async ({ data, context }) => ({
+    url: await createSelfHostedGoogleAuthorizationUrl({
+      integration: GA4_INTEGRATION,
+      user: {
+        userId: context.userId,
+        userEmail: context.userEmail,
+      },
+      callbackURL: data.callbackURL,
+      publicOrigin: getPublicOrigin(getRequest()),
+      purpose: "release",
     }),
   }));

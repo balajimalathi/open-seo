@@ -8,13 +8,18 @@ import {
 import { GoogleGlyph } from "@/client/features/gsc/GoogleGlyph";
 import { GoogleOAuthSetupWarning } from "@/client/features/integrations/GoogleOAuthSetupWarning";
 import { IntegrationConnectionCard } from "@/client/features/integrations/IntegrationConnectionCard";
+import { GoogleGrantAlreadyLinkedNotice } from "@/client/features/integrations/GoogleGrantAlreadyLinkedNotice";
 import { GoogleAnalyticsLogo } from "@/client/features/integrations/GoogleProductLogos";
-import { startGoogleLink } from "@/client/features/integrations/startGoogleLink";
+import {
+  startGoogleGrantRelease,
+  startGoogleLink,
+} from "@/client/features/integrations/startGoogleLink";
 import { getStandardErrorMessage } from "@/client/lib/error-messages";
 import { captureClientEvent } from "@/client/lib/posthog";
 import { isHostedClientAuthMode } from "@/lib/auth-mode";
 import {
   disconnectGa4,
+  disconnectOwnGa4Grant,
   getGa4Connection,
   listGa4Properties,
   setGa4Property,
@@ -30,11 +35,13 @@ export function GoogleAnalyticsConnectionCard({
   onDismiss,
   dismissing = false,
   heading,
+  alreadyLinked = false,
 }: {
   projectId: string;
   onDismiss?: () => void;
   dismissing?: boolean;
   heading?: React.ReactNode;
+  alreadyLinked?: boolean;
 }) {
   const hosted = isHostedClientAuthMode();
   const queryClient = useQueryClient();
@@ -114,7 +121,19 @@ export function GoogleAnalyticsConnectionCard({
     },
     onError: (error) => toast.error(getStandardErrorMessage(error)),
   });
+  const disconnectOwnGrantMutation = useMutation({
+    mutationFn: () => disconnectOwnGa4Grant({ data: {} }),
+    onSuccess: () => {
+      toast.success("Google Analytics disconnected");
+      setPicking(false);
+      setSelection(null);
+      invalidateConnectionState();
+    },
+    onError: (error) => toast.error(getStandardErrorMessage(error)),
+  });
   const handleConnect = () => void startGoogleLink("ga4", window.location.href);
+  const handleRelease = () =>
+    void startGoogleGrantRelease("ga4", window.location.href);
 
   if (hiddenPendingApproval) return null;
 
@@ -173,46 +192,96 @@ export function GoogleAnalyticsConnectionCard({
             onSave={() => selection && setPropertyMutation.mutate(selection)}
             saving={setPropertyMutation.isPending}
             onRetry={() => void propertiesQuery.refetch()}
-            secondaryAction={
-              connected
-                ? { label: "Cancel", onClick: () => setPicking(false) }
-                : onDismiss
-                  ? {
-                      label: "Dismiss",
-                      disabled: dismissing,
-                      onClick: onDismiss,
-                    }
-                  : {
-                      label: "Disconnect",
-                      destructive: true,
-                      disabled: disconnectMutation.isPending,
-                      onClick: () => disconnectMutation.mutate(),
-                    }
-            }
+            secondaryAction={ga4PickerSecondaryAction({
+              connected,
+              onCancel: () => setPicking(false),
+              onDismiss,
+              dismissing,
+              disconnecting: disconnectOwnGrantMutation.isPending,
+              onDisconnect: () => disconnectOwnGrantMutation.mutate(),
+            })}
           />
         ) : (
-          <div className="space-y-4">
-            <p className="text-sm text-base-content/70">
-              Connect GA4 to understand what organic visitors do after they land
-              on your site.
-            </p>
-            <div className="flex flex-wrap items-center gap-1">
-              <button
-                type="button"
-                onClick={handleConnect}
-                className="inline-flex items-center gap-2.5 rounded-lg border border-base-300 bg-base-100 px-4 py-2.5 text-sm font-semibold text-base-content shadow-sm transition hover:bg-base-200 hover:shadow focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
-              >
-                <GoogleGlyph className="size-[18px]" />
-                Connect with Google
-              </button>
-              {onDismiss ? (
-                <DismissButton onClick={onDismiss} disabled={dismissing} />
-              ) : null}
-            </div>
-          </div>
+          <DisconnectedPrompt
+            alreadyLinked={alreadyLinked}
+            onConnect={handleConnect}
+            onRelease={handleRelease}
+            onDismiss={onDismiss}
+            dismissing={dismissing}
+          />
         )}
       </IntegrationConnectionCard>
     </>
+  );
+}
+
+function ga4PickerSecondaryAction(input: {
+  connected: boolean;
+  onCancel: () => void;
+  onDismiss?: () => void;
+  dismissing: boolean;
+  disconnecting: boolean;
+  onDisconnect: () => void;
+}) {
+  if (input.connected) {
+    return { label: "Cancel", onClick: input.onCancel };
+  }
+  if (input.onDismiss) {
+    return {
+      label: "Dismiss",
+      disabled: input.dismissing,
+      onClick: input.onDismiss,
+    };
+  }
+  return {
+    label: "Disconnect",
+    destructive: true,
+    disabled: input.disconnecting,
+    onClick: input.onDisconnect,
+  };
+}
+
+function DisconnectedPrompt({
+  alreadyLinked,
+  onConnect,
+  onRelease,
+  onDismiss,
+  dismissing,
+}: {
+  alreadyLinked: boolean;
+  onConnect: () => void;
+  onRelease: () => void;
+  onDismiss?: () => void;
+  dismissing: boolean;
+}) {
+  return (
+    <div className="space-y-4">
+      {alreadyLinked ? (
+        <GoogleGrantAlreadyLinkedNotice
+          integrationName="Google Analytics"
+          onRelease={onRelease}
+          releasing={false}
+        />
+      ) : (
+        <p className="text-sm text-base-content/70">
+          Connect GA4 to understand what organic visitors do after they land on
+          your site.
+        </p>
+      )}
+      <div className="flex flex-wrap items-center gap-1">
+        <button
+          type="button"
+          onClick={onConnect}
+          className="inline-flex items-center gap-2.5 rounded-lg border border-base-300 bg-base-100 px-4 py-2.5 text-sm font-semibold text-base-content shadow-sm transition hover:bg-base-200 hover:shadow focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+        >
+          <GoogleGlyph className="size-[18px]" />
+          Connect with Google
+        </button>
+        {onDismiss ? (
+          <DismissButton onClick={onDismiss} disabled={dismissing} />
+        ) : null}
+      </div>
+    </div>
   );
 }
 

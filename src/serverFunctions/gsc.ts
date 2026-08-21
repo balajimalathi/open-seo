@@ -2,12 +2,14 @@ import { createServerFn } from "@tanstack/react-start";
 import { getRequest } from "@tanstack/react-start/server";
 import { waitUntil } from "cloudflare:workers";
 import { z } from "zod";
-import { GscService } from "@/server/features/gsc/services/GscService";
+import { GoogleGrantService } from "@/server/features/google/GoogleGrantService";
 import { hasSelfHostedGoogleOAuthConfig } from "@/server/features/google/oauth-config";
 import {
   createSelfHostedGoogleAuthorizationUrl,
   GSC_INTEGRATION,
 } from "@/server/features/google/selfHostedOAuth";
+import { GscService } from "@/server/features/gsc/services/GscService";
+import { GSC_OAUTH_PROVIDER_ID } from "@/shared/gsc";
 import { captureServerEvent } from "@/server/lib/posthog";
 import { getPublicOrigin } from "@/server/mcp/public-origin";
 import { isHostedServerAuthMode } from "@/server/lib/runtime-env";
@@ -23,6 +25,9 @@ const setSiteSchema = projectScopedSchema.extend({
 });
 const startSelfHostedLinkSchema = z.object({
   callbackURL: z.string().min(1),
+});
+const grantAccountSchema = z.object({
+  accountId: z.string().min(1).optional(),
 });
 
 // Account-level grant check (no project needed) for surfaces like onboarding
@@ -146,3 +151,48 @@ export const startSelfHostedGscLink = createServerFn({ method: "POST" })
 
     return { url };
   });
+
+export const listGscGrants = createServerFn({ method: "GET" })
+  .middleware(requireAuthenticatedContext)
+  .handler(async ({ context }) => {
+    const grants = await GoogleGrantService.listGrants(
+      context.userId,
+      GSC_OAUTH_PROVIDER_ID,
+    );
+    return { grants };
+  });
+
+export const disconnectOwnGscGrant = createServerFn({ method: "POST" })
+  .middleware(requireAuthenticatedContext)
+  .validator(grantAccountSchema)
+  .handler(async ({ data, context }) => {
+    if (data.accountId) {
+      await GoogleGrantService.disconnectOwnGrant({
+        userId: context.userId,
+        providerId: GSC_OAUTH_PROVIDER_ID,
+        googleAccountId: data.accountId,
+      });
+    } else {
+      await GoogleGrantService.disconnectAllOwnGrants(
+        context.userId,
+        GSC_OAUTH_PROVIDER_ID,
+      );
+    }
+    return { connected: false as const };
+  });
+
+export const startGscGrantRelease = createServerFn({ method: "POST" })
+  .middleware(requireAuthenticatedContext)
+  .validator(startSelfHostedLinkSchema)
+  .handler(async ({ data, context }) => ({
+    url: await createSelfHostedGoogleAuthorizationUrl({
+      integration: GSC_INTEGRATION,
+      user: {
+        userId: context.userId,
+        userEmail: context.userEmail,
+      },
+      callbackURL: data.callbackURL,
+      publicOrigin: getPublicOrigin(getRequest()),
+      purpose: "release",
+    }),
+  }));

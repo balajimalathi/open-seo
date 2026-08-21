@@ -67,9 +67,31 @@ async function existsForConnectorAccount(
   return rows.length > 0;
 }
 
+async function deleteByConnectorAccount(
+  userId: string,
+  gscAccountId: string,
+): Promise<void> {
+  await db
+    .delete(gscConnections)
+    .where(
+      and(
+        eq(gscConnections.connectedByUserId, userId),
+        eq(gscConnections.gscAccountId, gscAccountId),
+      ),
+    );
+}
+
+async function deleteByGoogleAccountId(gscAccountId: string): Promise<void> {
+  await db
+    .delete(gscConnections)
+    .where(eq(gscConnections.gscAccountId, gscAccountId));
+}
+
 export const GscConnectionRepository = {
   getByProjectId,
   upsert,
   deleteByProjectId,
   existsForConnectorAccount,
+  deleteByConnectorAccount,
+  deleteByGoogleAccountId,
 };
